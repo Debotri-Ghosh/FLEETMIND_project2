@@ -1,0 +1,39 @@
+# ── Core ──────────────────────────────────────────────────────────────
+python-dotenv==1.0.1        # loads .env into environment variables
+numpy==1.26.4
+pandas==2.2.2
+scipy==1.13.1                # scipy.io.loadmat -> reads CWRU .mat files
+scikit-learn==1.5.0           # train/test split, scaling, metrics
+
+# ── Deep learning (local fault classifier) ──────────────────────────────
+torch==2.3.1                  # 1D-CNN / LSTM classifier, autoencoder
+torchvision==0.18.1           # transforms utilities (optional, harmless to keep)
+
+# ── Federated learning ───────────────────────────────────────────────────
+flwr==1.9.0                   # Flower: FedAvg / FedProx across simulated depots
+
+# ── Rare-fault augmentation (GAN) ────────────────────────────────────────
+# tsgm provides TimeGAN. It supports a PyTorch backend, so it reuses the
+# torch install above instead of pulling in a separate TensorFlow stack
+# (which is what caused the ydata-synthetic/pytest conflict).
+#tsgm==0.1.0
+
+# ── Multi-agent orchestration ────────────────────────────────────────────
+langgraph==0.1.19
+langchain-core==0.2.24
+
+# ── Backend / dashboard ──────────────────────────────────────────────────
+fastapi==0.110.3
+uvicorn[standard]==0.30.1
+streamlit==1.36.0
+
+# ── Database ──────────────────────────────────────────────────────────────
+psycopg2-binary==2.9.9        # PostgreSQL driver
+sqlalchemy==2.0.31
+
+# ── Dataset download convenience (Kaggle mirror) ─────────────────────────
+kagglehub==0.2.9
+
+# ── Dev / verification ────────────────────────────────────────────────────
+pytest==8.2.2
+matplotlib==3.9.0             # sanity-plot vibration signals during EDA

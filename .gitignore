@@ -1,0 +1,24 @@
+# Python virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Secrets / environment variables
+.env
+
+# Raw CWRU dataset
+data/raw/
+*.mat
+*.zip
+
+# Generated EDA output
+eda_output/
+
+# Local databases
+*.db
+*.sqlite
+
+# IDE files
+.vscode/
