@@ -84,7 +84,7 @@ def ingest(
             session.add(experiment)
             session.flush()
 
-            for w_index, start, end, values in split_windows(signal, window_size):
+            for w_index, (start, end, values) in enumerate(split_windows(signal, window_size)):
                 session.add(
                     SignalWindow(
                         experiment_id=experiment.id,
