@@ -1,24 +1,40 @@
-# Python virtual environment
-venv/
-
-# Python cache
+# ── Python ───────────────────────────────────────────────
 __pycache__/
 *.pyc
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
 
-# Secrets / environment variables
+# ── Node / Next.js ───────────────────────────────────────
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# ── Secrets ──────────────────────────────────────────────
 .env
+.env.local
 
-# Raw CWRU dataset
+# ── Raw CWRU dataset (restored via download script) ──────
 data/raw/
 *.mat
 *.zip
 
-# Generated EDA output
+# ── Generated output ─────────────────────────────────────
 eda_output/
+mlruns/
 
-# Local databases
+# ── Local databases ──────────────────────────────────────
 *.db
 *.sqlite
 
-# IDE files
+# ── IDE ──────────────────────────────────────────────────
 .vscode/
+.idea/
