@@ -84,19 +84,31 @@ def ingest(
             session.add(experiment)
             session.flush()
 
-            for w_index, (start, end, values) in enumerate(split_windows(signal, window_size)):
-                session.add(
+            rows = split_windows(signal, window_size)
+            batch: list[SignalWindow] = []
+            for w_index, (start, end, values) in enumerate(rows):
+                # NOTE: the live Postgres table stores raw_values as
+                # double precision[]. The psycopg2 ARRAY adapter serializes a
+                # plain Python list correctly, so pass the floats list as-is.
+                batch.append(
                     SignalWindow(
                         experiment_id=experiment.id,
                         window_index=w_index,
                         start_sample=start,
                         end_sample=end,
-                        raw_values=values,
+                        raw_values=list(values),
                         label=row["fault_type"],
                     )
                 )
+                if len(batch) >= 200:
+                    session.add_all(batch)
+                    session.flush()
+                    batch = []
+            if batch:
+                session.add_all(batch)
+                session.flush()
 
-            n_windows = len(signal) // window_size
+            n_windows = len(rows)
             total_experiments += 1
             total_windows += n_windows
             print(f"  [ok] {mat_path.name}: {n_windows} windows -> experiment {experiment.id}")
