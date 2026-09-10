@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16
@@ -24,7 +22,7 @@ services:
     container_name: fleetmind_api
     restart: unless-stopped
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://fleetmind:change_me@postgres:5432/fleetmind}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fleetmind}:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-fleetmind}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
@@ -38,12 +36,11 @@ services:
       timeout: 5s
       retries: 5
 
-  # One-shot schema migration + depot seeding. Exits 0 when done.
   migrate:
     build: ./backend
     container_name: fleetmind_migrate
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://fleetmind:change_me@postgres:5432/fleetmind}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fleetmind}:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-fleetmind}
     command: ["alembic", "upgrade", "head"]
     depends_on:
       postgres:
@@ -61,7 +58,6 @@ services:
     depends_on:
       - api
 
-  # Optional lightweight DB viewer at http://localhost:8080
   adminer:
     image: adminer
     container_name: fleetmind_adminer
@@ -73,3 +69,4 @@ services:
 
 volumes:
   fleetmind_pgdata:
+
