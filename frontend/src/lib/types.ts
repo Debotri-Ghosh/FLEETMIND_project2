@@ -92,6 +92,10 @@ export interface ServiceRequest {
   technician_id: number | null;
   created_at: string;
   updated_at: string;
+  /** Set only when agent_decision_id is not null (AI-filed request). */
+  agent_decision_text: string | null;
+  agent_risk_score: number | null;
+  predicted_fault: string | null;
 }
 
 export interface ServiceRequestCreate {

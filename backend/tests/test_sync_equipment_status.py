@@ -8,7 +8,13 @@ Equipment 3 is retired but linked to the same HIGH-decision experiment.
 """
 
 from fleetmind.agents.sync_equipment_status import _worst_urgency, sync_equipment_status
-from fleetmind.db.models import AgentDecision, Equipment, ModelPrediction, SignalWindow
+from fleetmind.db.models import (
+    AgentDecision,
+    Equipment,
+    ModelPrediction,
+    ServiceRequest,
+    SignalWindow,
+)
 
 
 def test_worst_urgency_picks_highest_rank():
@@ -85,3 +91,71 @@ def test_sync_clears_flag_when_decisions_no_longer_warrant_it(product_session):
     changes = sync_equipment_status(product_session)
     assert ("Bearing Motor A1", "maintenance", "active", "LOW") in changes
     assert product_session.get(Equipment, 1).status == "active"
+
+
+def _ai_requests_for(session, equipment_id):
+    return (
+        session.query(ServiceRequest)
+        .filter_by(equipment_id=equipment_id)
+        .filter(ServiceRequest.agent_decision_id.is_not(None))
+        .all()
+    )
+
+
+def test_sync_files_ai_service_request_on_maintenance_flag(product_session):
+    sync_equipment_status(product_session)
+
+    requests = _ai_requests_for(product_session, 1)
+    assert len(requests) == 1
+    req = requests[0]
+    assert req.status == "reported"
+    assert req.priority == "high"
+    assert req.customer_id == 1
+    assert req.depot_id == 1
+    assert "High" in req.title
+    assert req.agent_decision_id is not None
+    assert req.prediction_id is not None
+
+
+def test_sync_does_not_duplicate_open_ai_request_on_rerun(product_session):
+    sync_equipment_status(product_session)
+    sync_equipment_status(product_session)
+    sync_equipment_status(product_session)
+
+    assert len(_ai_requests_for(product_session, 1)) == 1
+
+
+def test_sync_dry_run_does_not_create_service_request(product_session):
+    sync_equipment_status(product_session, dry_run=True)
+    product_session.rollback()
+
+    assert _ai_requests_for(product_session, 1) == []
+
+
+def test_sync_refiles_after_previous_ai_request_resolved(product_session):
+    sync_equipment_status(product_session)
+    first = _ai_requests_for(product_session, 1)[0]
+    first.status = "resolved"
+    product_session.commit()
+
+    sync_equipment_status(product_session)
+
+    open_requests = [
+        r for r in _ai_requests_for(product_session, 1) if r.status != "resolved"
+    ]
+    assert len(open_requests) == 1
+    assert open_requests[0].id != first.id
+
+
+def test_sync_does_not_file_request_for_unlinked_or_retired_equipment(product_session):
+    sync_equipment_status(product_session)
+
+    assert _ai_requests_for(product_session, 2) == []  # unlinked
+    assert _ai_requests_for(product_session, 3) == []  # retired
+
+
+def test_sync_filed_requests_log_records_equipment_and_urgency(product_session):
+    log: list[tuple[str, str]] = []
+    sync_equipment_status(product_session, filed_requests_log=log)
+
+    assert log == [("Bearing Motor A1", "HIGH")]

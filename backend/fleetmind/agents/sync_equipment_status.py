@@ -12,6 +12,17 @@ is never touched — that's a manual, permanent state.
 Idempotent and bidirectional: re-running can both escalate and clear a flag
 as agent_decisions change.
 
+Whenever an equipment computes to 'maintenance', this also ensures there is
+an open, AI-filed ServiceRequest for it (agent_decision_id set, status not
+resolved/cancelled) — carrying the triggering agent_decision_id/prediction_id
+so the operator UI can show the actual fault type/risk score/decision text
+instead of just a status badge. This is checked on every run (not only on
+the active->maintenance transition), so if an operator resolves/cancels the
+AI-filed request while the underlying risk is still HIGH/CRITICAL, the next
+sync re-files one rather than silently leaving the equipment unexplained.
+The open-request check is what keeps re-runs idempotent — it does not refile
+once a request is already open for that equipment.
+
 Usage:
     python -m fleetmind.agents.sync_equipment_status
     python -m fleetmind.agents.sync_equipment_status --dry-run
@@ -22,14 +33,24 @@ from __future__ import annotations
 import argparse
 import re
 
-from sqlalchemy import select
+from sqlalchemy import insert, select
 
-from fleetmind.db.models import AgentDecision, Equipment, ModelPrediction, SignalWindow
+from fleetmind.db.models import (
+    AgentDecision,
+    Equipment,
+    ModelPrediction,
+    ServiceRequest,
+    SignalWindow,
+)
 from fleetmind.db.session import create_db_engine, make_session_factory
 
 URGENCY_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 FLAG_THRESHOLD = URGENCY_ORDER["HIGH"]
 _URGENCY_RE = re.compile(r"^\[(\w+)\]")
+
+# Requests in these states no longer count as "open" for the idempotency
+# guard, so a resolved/cancelled AI-filed request will not block a refile.
+_CLOSED_REQUEST_STATUSES = ("resolved", "cancelled")
 
 
 def _worst_urgency(decision_texts: list[str]) -> str | None:
@@ -46,24 +67,101 @@ def _worst_urgency(decision_texts: list[str]) -> str | None:
     return worst
 
 
-def sync_equipment_status(session, dry_run: bool = False) -> list[tuple[str, str, str, str | None]]:
-    """Returns [(equipment_name, old_status, new_status, worst_urgency), ...] for changed rows."""
-    equipment_rows = session.execute(
-        select(Equipment.id, Equipment.name, Equipment.status, Equipment.linked_experiment_id).where(
-            Equipment.linked_experiment_id.is_not(None), Equipment.status != "retired"
+def _worst_decision(rows: list[tuple[int, str, int]]) -> tuple[int, str, int] | None:
+    """rows: [(decision_id, decision_text, prediction_id), ...]. Returns
+    (decision_id, urgency, prediction_id) for the worst-ranked tagged
+    decision, or None if none of the rows carry a recognized urgency tag."""
+    best: tuple[int, str, int] | None = None
+    best_rank = -1
+    for decision_id, text, prediction_id in rows:
+        match = _URGENCY_RE.match(text)
+        if not match:
+            continue
+        rank = URGENCY_ORDER.get(match.group(1), -1)
+        if rank > best_rank:
+            best, best_rank = (decision_id, match.group(1), prediction_id), rank
+    return best
+
+
+def _ensure_ai_service_request(
+    session,
+    *,
+    equip_id: int,
+    customer_id: int,
+    depot_id: int,
+    decision_rows: list[tuple[int, str, int]],
+    dry_run: bool,
+) -> str | None:
+    """Creates an AI-filed ServiceRequest for this equipment if none is
+    currently open. Returns the urgency it filed at, or None if it left
+    things alone (an open AI request already exists, or there's no tagged
+    decision to file from)."""
+    already_open = session.execute(
+        select(ServiceRequest.id).where(
+            ServiceRequest.equipment_id == equip_id,
+            ServiceRequest.agent_decision_id.is_not(None),
+            ServiceRequest.status.notin_(_CLOSED_REQUEST_STATUSES),
         )
+    ).first()
+    if already_open is not None:
+        return None
+
+    worst_decision = _worst_decision(decision_rows)
+    if worst_decision is None:
+        return None
+    decision_id, urgency, prediction_id = worst_decision
+
+    if not dry_run:
+        session.execute(
+            insert(ServiceRequest).values(
+                customer_id=customer_id,
+                depot_id=depot_id,
+                equipment_id=equip_id,
+                title=f"AI-flagged: {urgency.title()} urgency detected",
+                description=(
+                    f"Automatically filed by the agent pipeline after a {urgency} "
+                    "risk decision from the diagnosis/risk agent chain."
+                ),
+                priority=urgency.lower(),
+                status="reported",
+                agent_decision_id=decision_id,
+                prediction_id=prediction_id,
+            )
+        )
+    return urgency
+
+
+def sync_equipment_status(
+    session, dry_run: bool = False, filed_requests_log: list[tuple[str, str]] | None = None
+) -> list[tuple[str, str, str, str | None]]:
+    """Returns [(equipment_name, old_status, new_status, worst_urgency), ...] for changed rows.
+
+    As a side effect, also files (or reports, in dry-run) AI-flagged service
+    requests per _ensure_ai_service_request's rules — see module docstring.
+    If filed_requests_log is given, (equipment_name, urgency) is appended to
+    it for every request filed (or, in dry-run, that would be filed).
+    """
+    equipment_rows = session.execute(
+        select(
+            Equipment.id,
+            Equipment.name,
+            Equipment.status,
+            Equipment.customer_id,
+            Equipment.depot_id,
+            Equipment.linked_experiment_id,
+        ).where(Equipment.linked_experiment_id.is_not(None), Equipment.status != "retired")
     ).all()
 
     changes = []
-    for equip_id, name, old_status, experiment_id in equipment_rows:
-        decision_texts = session.execute(
-            select(AgentDecision.decision_text)
+    for equip_id, name, old_status, customer_id, depot_id, experiment_id in equipment_rows:
+        decision_rows = session.execute(
+            select(AgentDecision.id, AgentDecision.decision_text, AgentDecision.prediction_id)
             .join(ModelPrediction, ModelPrediction.id == AgentDecision.prediction_id)
             .join(SignalWindow, SignalWindow.id == ModelPrediction.window_id)
             .where(SignalWindow.experiment_id == experiment_id)
-        ).scalars().all()
+        ).all()
 
-        worst = _worst_urgency(decision_texts)
+        worst = _worst_urgency([text for _, text, _ in decision_rows])
         worst_rank = URGENCY_ORDER.get(worst, -1)
         new_status = "maintenance" if worst_rank >= FLAG_THRESHOLD else "active"
 
@@ -75,6 +173,18 @@ def sync_equipment_status(session, dry_run: bool = False) -> list[tuple[str, str
                     .where(Equipment.id == equip_id)
                     .values(status=new_status)
                 )
+
+        if new_status == "maintenance":
+            filed_urgency = _ensure_ai_service_request(
+                session,
+                equip_id=equip_id,
+                customer_id=customer_id,
+                depot_id=depot_id,
+                decision_rows=decision_rows,
+                dry_run=dry_run,
+            )
+            if filed_urgency is not None and filed_requests_log is not None:
+                filed_requests_log.append((name, filed_urgency))
 
     return changes
 
@@ -88,7 +198,8 @@ def main() -> None:
     factory = make_session_factory(engine)
     session = factory()
 
-    changes = sync_equipment_status(session, dry_run=args.dry_run)
+    filed_requests: list[tuple[str, str]] = []
+    changes = sync_equipment_status(session, dry_run=args.dry_run, filed_requests_log=filed_requests)
 
     if not changes:
         print("No status changes.")
@@ -96,12 +207,16 @@ def main() -> None:
         for name, old, new, worst in changes:
             print(f"  {name}: {old} -> {new} (worst decision: {worst})")
 
+    verb = "would file" if args.dry_run else "filed"
+    for name, urgency in filed_requests:
+        print(f"  {verb} AI service request for {name} ({urgency})")
+
     if args.dry_run:
         session.rollback()
-        print(f"Dry run: {len(changes)} equipment would change.")
+        print(f"Dry run: {len(changes)} equipment would change, {len(filed_requests)} requests would be filed.")
     else:
         session.commit()
-        print(f"Done. {len(changes)} equipment updated.")
+        print(f"Done. {len(changes)} equipment updated, {len(filed_requests)} AI service requests filed.")
     session.close()
 
 

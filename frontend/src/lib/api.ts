@@ -25,7 +25,7 @@ async function sendJson<T>(
   return resp.json() as Promise<T>;
 }
 
-function toQueryString(params: Record<string, string | number | undefined>) {
+function toQueryString(params: Record<string, string | number | boolean | undefined>) {
   const qs = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined) qs.set(key, String(value));
@@ -74,6 +74,7 @@ export const api = {
     depot_id?: number;
     equipment_id?: number;
     status?: string;
+    ai_flagged?: boolean;
   }) =>
     getJson<import("./types").ServiceRequest[]>(
       `/service-requests${toQueryString({
@@ -81,6 +82,7 @@ export const api = {
         depot_id: params?.depot_id,
         equipment_id: params?.equipment_id,
         status: params?.status,
+        ai_flagged: params?.ai_flagged,
       })}`
     ),
   createServiceRequest: (payload: import("./types").ServiceRequestCreate) =>

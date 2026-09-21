@@ -3,6 +3,8 @@ service-requests, work-orders. See tests/conftest.py:product_client for the
 seed data (1 customer, 1 technician, 3 equipment rows — one linked to an
 experiment with a HIGH agent_decision, one unlinked, one retired)."""
 
+from fleetmind.agents.sync_equipment_status import sync_equipment_status
+
 
 def test_list_customers(product_client):
     resp = product_client.get("/customers")
@@ -84,6 +86,48 @@ def test_create_and_list_service_request(product_client):
 
 def test_get_service_request_404(product_client):
     assert product_client.get("/service-requests/999").status_code == 404
+
+
+def test_customer_filed_request_has_no_agent_context(product_client):
+    resp = product_client.post(
+        "/service-requests", json={"customer_id": 1, "depot_id": 1, "title": "Odd noise"}
+    )
+    body = resp.json()
+    assert body["agent_decision_text"] is None
+    assert body["agent_risk_score"] is None
+    assert body["predicted_fault"] is None
+
+
+def test_ai_flagged_service_request_carries_agent_context(product_client, product_session):
+    sync_equipment_status(product_session)
+
+    resp = product_client.get("/service-requests", params={"ai_flagged": True})
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["agent_decision_text"] == "[HIGH] elevated fault repetition rate"
+    assert row["agent_risk_score"] == 0.8
+    assert row["predicted_fault"] == "InnerRace"
+    assert row["priority"] == "high"
+
+    detail = product_client.get(f"/service-requests/{row['id']}").json()
+    assert detail["agent_decision_text"] == "[HIGH] elevated fault repetition rate"
+
+
+def test_ai_flagged_filter_excludes_customer_filed_requests(product_client, product_session):
+    sync_equipment_status(product_session)
+    product_client.post(
+        "/service-requests", json={"customer_id": 1, "depot_id": 1, "title": "Manual report"}
+    )
+
+    ai_only = product_client.get("/service-requests", params={"ai_flagged": True}).json()
+    assert len(ai_only) == 1
+    assert ai_only[0]["title"].startswith("AI-flagged")
+
+    customer_only = product_client.get("/service-requests", params={"ai_flagged": False}).json()
+    assert len(customer_only) == 1
+    assert customer_only[0]["title"] == "Manual report"
 
 
 def test_create_service_request_defaults_priority_medium(product_client):

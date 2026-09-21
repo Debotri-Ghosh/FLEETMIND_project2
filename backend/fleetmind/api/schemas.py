@@ -107,6 +107,15 @@ class ServiceRequest(BaseModel):
     technician_id: int | None
     created_at: datetime
     updated_at: datetime
+    agent_decision_text: str | None = Field(
+        default=None, description="Set only for AI-filed requests (agent_decision_id is not null)."
+    )
+    agent_risk_score: float | None = Field(
+        default=None, description="Set only for AI-filed requests (agent_decision_id is not null)."
+    )
+    predicted_fault: str | None = Field(
+        default=None, description="Set only for AI-filed requests (agent_decision_id is not null)."
+    )
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -52,13 +52,67 @@ function EquipmentBoard({ depotId }: { depotId: number | null }) {
   );
 }
 
+function AiFlaggedPanel() {
+  const requests = useQuery({
+    queryKey: ["service-requests", "ai-flagged"],
+    queryFn: () => api.serviceRequests({ ai_flagged: true }),
+  });
+  const equipment = useQuery({ queryKey: ["equipment", "all"], queryFn: () => api.equipment() });
+
+  if (requests.isLoading) return <p className="text-slate-500">Loading AI-flagged requests…</p>;
+  if (requests.isError) return <p className="text-red-600">Failed to load AI-flagged requests.</p>;
+  if (!requests.data?.length)
+    return (
+      <p className="text-slate-500">
+        No AI-flagged requests — the agent pipeline hasn&apos;t raised any HIGH/CRITICAL risk
+        decisions that don&apos;t already have an open request.
+      </p>
+    );
+
+  return (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="border-b text-left text-slate-500">
+          <th className="py-2">Equipment</th>
+          <th className="py-2">Predicted Fault</th>
+          <th className="py-2">Risk Score</th>
+          <th className="py-2">Priority</th>
+          <th className="py-2">Status</th>
+          <th className="py-2">Agent Decision</th>
+        </tr>
+      </thead>
+      <tbody>
+        {requests.data.map((r) => (
+          <tr key={r.id} className="border-b align-top last:border-0">
+            <td className="py-2 font-medium">
+              {equipment.data?.find((e) => e.id === r.equipment_id)?.name ??
+                `Equipment #${r.equipment_id}`}
+            </td>
+            <td className="py-2">{r.predicted_fault ?? "—"}</td>
+            <td className="py-2">
+              {r.agent_risk_score !== null ? `${(r.agent_risk_score * 100).toFixed(0)}%` : "—"}
+            </td>
+            <td className="py-2">
+              <PriorityBadge priority={r.priority} />
+            </td>
+            <td className="py-2">
+              <StatusBadge status={r.status} />
+            </td>
+            <td className="max-w-md py-2 text-slate-600">{r.agent_decision_text ?? "—"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function DispatchQueue() {
   const queryClient = useQueryClient();
   const requests = useQuery({
     queryKey: ["service-requests", "all"],
     queryFn: () => api.serviceRequests(),
   });
-  const technicians = useQuery({ queryKey: ["technicians"], queryFn: api.technicians });
+  const technicians = useQuery({ queryKey: ["technicians"], queryFn: () => api.technicians() });
   const [selectedTechnician, setSelectedTechnician] = useState<Record<number, number>>({});
 
   const dispatch = useMutation({
@@ -152,7 +206,7 @@ function WorkOrderQueue() {
     queryKey: ["service-requests", "all"],
     queryFn: () => api.serviceRequests(),
   });
-  const technicians = useQuery({ queryKey: ["technicians"], queryFn: api.technicians });
+  const technicians = useQuery({ queryKey: ["technicians"], queryFn: () => api.technicians() });
 
   const updateStatus = useMutation({
     mutationFn: (vars: { id: number; status: WorkOrderStatus }) =>
@@ -257,6 +311,18 @@ export default function OperatorPage() {
             </label>
           </div>
           <EquipmentBoard depotId={depotId} />
+        </section>
+
+        <section className="rounded-xl bg-white p-6 shadow">
+          <div className="mb-4">
+            <h2 className="text-xl font-semibold">AI-Flagged Requests</h2>
+            <p className="text-sm text-slate-500">
+              Auto-filed by the agent pipeline (fleetmind.agents.sync_equipment_status) when a
+              HIGH or CRITICAL risk decision has no open request yet — shows the fault type, risk
+              score, and decision text behind the flag, not just a status badge.
+            </p>
+          </div>
+          <AiFlaggedPanel />
         </section>
 
         <section className="rounded-xl bg-white p-6 shadow">
