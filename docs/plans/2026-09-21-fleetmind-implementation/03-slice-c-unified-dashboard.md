@@ -31,7 +31,7 @@ FedProx mean baseline 60.0% vs mean final 42.9%).
 
 ### Backend: don't let one bad file take down the whole endpoint
 
-- [ ] `model_performance()` currently does `json.loads(metrics_path.read_text())`
+- [x] `model_performance()` currently does `json.loads(metrics_path.read_text())`
   with no error handling — a truncated or corrupted `metrics.json` (e.g. from a
   training run that crashed mid-write) would throw `json.JSONDecodeError` and
   500 the *entire* endpoint, hiding the other three depots' good data. Wrap each
@@ -39,13 +39,13 @@ FedProx mean baseline 60.0% vs mean final 42.9%).
   rather than crashing the whole response. Same for the federated.json read.
   Add a test: one corrupted depot metrics file among four valid ones -> the
   endpoint still returns the three valid depots, 200, not 500.
-- [ ] `model_performance()` assumes `m["best_val_acc"]`, `m["train_windows"]`,
+- [x] `model_performance()` assumes `m["best_val_acc"]`, `m["train_windows"]`,
   `m["val_windows"]` are always present — a metrics.json from an older/different
   training run shape could be missing a key and raise `KeyError` -> 500. Use
   `.get()` with a sensible fallback (or skip the depot, matching the corrupted-
   file handling above) and add a test for a metrics.json missing one of these
   keys.
-- [ ] `federated["final"]` is assumed to be a dict of `{depot_id: {"accuracy":
+- [x] `federated["final"]` is assumed to be a dict of `{depot_id: {"accuracy":
   ...}}` — a federated.json from a run that failed before producing a `final`
   block would raise `KeyError` on `f["final"]`. Guard with `.get("final", {})`
   and confirm `per_depot_final_accuracy` comes back `{}` rather than crashing.
