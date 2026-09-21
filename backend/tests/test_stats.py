@@ -13,9 +13,7 @@ def test_model_performance_reads_mlruns(client, tmp_path, monkeypatch):
     depot_dir = tmp_path / "depot_1"
     depot_dir.mkdir()
     (depot_dir / "metrics.json").write_text(
-        json.dumps(
-            {"depot_id": 1, "best_val_acc": 0.65, "train_windows": 100, "val_windows": 30}
-        )
+        json.dumps({"depot_id": 1, "best_val_acc": 0.65, "train_windows": 100, "val_windows": 30})
     )
     fed_dir = tmp_path / "federated" / "fedprox"
     fed_dir.mkdir(parents=True)
@@ -64,9 +62,7 @@ def test_model_performance_skips_depots_without_metrics_file(client, tmp_path, m
     depot_dir = tmp_path / "depot_2"
     depot_dir.mkdir()
     (depot_dir / "metrics.json").write_text(
-        json.dumps(
-            {"depot_id": 2, "best_val_acc": 0.72, "train_windows": 200, "val_windows": 50}
-        )
+        json.dumps({"depot_id": 2, "best_val_acc": 0.72, "train_windows": 200, "val_windows": 50})
     )
     monkeypatch.setattr(stats_module, "MLRUNS", tmp_path)
 

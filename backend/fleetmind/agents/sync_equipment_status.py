@@ -33,7 +33,7 @@ from __future__ import annotations
 import argparse
 import re
 
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, update
 
 from fleetmind.db.models import (
     AgentDecision,
@@ -162,16 +162,14 @@ def sync_equipment_status(
         ).all()
 
         worst = _worst_urgency([text for _, text, _ in decision_rows])
-        worst_rank = URGENCY_ORDER.get(worst, -1)
+        worst_rank = URGENCY_ORDER.get(worst, -1) if worst is not None else -1
         new_status = "maintenance" if worst_rank >= FLAG_THRESHOLD else "active"
 
         if new_status != old_status:
             changes.append((name, old_status, new_status, worst))
             if not dry_run:
                 session.execute(
-                    Equipment.__table__.update()
-                    .where(Equipment.id == equip_id)
-                    .values(status=new_status)
+                    update(Equipment).where(Equipment.id == equip_id).values(status=new_status)
                 )
 
         if new_status == "maintenance":
@@ -199,7 +197,9 @@ def main() -> None:
     session = factory()
 
     filed_requests: list[tuple[str, str]] = []
-    changes = sync_equipment_status(session, dry_run=args.dry_run, filed_requests_log=filed_requests)
+    changes = sync_equipment_status(
+        session, dry_run=args.dry_run, filed_requests_log=filed_requests
+    )
 
     if not changes:
         print("No status changes.")
@@ -213,10 +213,14 @@ def main() -> None:
 
     if args.dry_run:
         session.rollback()
-        print(f"Dry run: {len(changes)} equipment would change, {len(filed_requests)} requests would be filed.")
+        print(
+            f"Dry run: {len(changes)} equipment would change, {len(filed_requests)} requests would be filed."
+        )
     else:
         session.commit()
-        print(f"Done. {len(changes)} equipment updated, {len(filed_requests)} AI service requests filed.")
+        print(
+            f"Done. {len(changes)} equipment updated, {len(filed_requests)} AI service requests filed."
+        )
     session.close()
 
 

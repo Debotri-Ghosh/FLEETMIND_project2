@@ -19,8 +19,7 @@ from fleetmind.db.models import (
 
 def test_worst_urgency_picks_highest_rank():
     assert (
-        _worst_urgency(["[LOW] fine", "[CRITICAL] failing now", "[MEDIUM] watch it"])
-        == "CRITICAL"
+        _worst_urgency(["[LOW] fine", "[CRITICAL] failing now", "[MEDIUM] watch it"]) == "CRITICAL"
     )
 
 
@@ -140,9 +139,7 @@ def test_sync_refiles_after_previous_ai_request_resolved(product_session):
 
     sync_equipment_status(product_session)
 
-    open_requests = [
-        r for r in _ai_requests_for(product_session, 1) if r.status != "resolved"
-    ]
+    open_requests = [r for r in _ai_requests_for(product_session, 1) if r.status != "resolved"]
     assert len(open_requests) == 1
     assert open_requests[0].id != first.id
 

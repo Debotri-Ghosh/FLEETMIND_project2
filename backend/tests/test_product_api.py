@@ -177,9 +177,7 @@ def test_work_order_lifecycle(product_client):
 
 
 def test_create_work_order_404_for_missing_service_request(product_client):
-    resp = product_client.post(
-        "/work-orders", json={"service_request_id": 999, "technician_id": 1}
-    )
+    resp = product_client.post("/work-orders", json={"service_request_id": 999, "technician_id": 1})
     assert resp.status_code == 404
 
 

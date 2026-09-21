@@ -40,7 +40,7 @@ def test_average_parameters_is_sample_weighted():
 
 def test_local_train_reduces_loss_and_evaluates():
     torch.manual_seed(0)
-    model = BearingCNN(num_classes=2)
+    model = BearingCNN(num_classes=len(LABEL_MAP))
     rows = _toy_rows(64, 0) + _toy_rows(64, 1)
     before = evaluate_model(model, rows)["accuracy"]
     stats = local_train(model, rows, epochs=2, batch_size=32, lr=3e-3, mu=0.0)
@@ -51,7 +51,7 @@ def test_local_train_reduces_loss_and_evaluates():
 
 def test_local_train_fedprox_runs():
     torch.manual_seed(0)
-    model = BearingCNN(num_classes=2)
+    model = BearingCNN(num_classes=len(LABEL_MAP))
     rows = _toy_rows(32, 0) + _toy_rows(32, 1)
     stats = local_train(model, rows, epochs=1, batch_size=32, lr=3e-3, mu=0.1)
     assert stats["loss"] > 0

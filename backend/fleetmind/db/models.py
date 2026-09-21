@@ -215,7 +215,9 @@ class WorkOrder(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
-    service_request_id: Mapped[int] = mapped_column(ForeignKey("service_requests.id"), nullable=False)
+    service_request_id: Mapped[int] = mapped_column(
+        ForeignKey("service_requests.id"), nullable=False
+    )
     technician_id: Mapped[int] = mapped_column(ForeignKey("technicians.id"), nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="assigned")
     location_lat: Mapped[float | None] = mapped_column(Float)
@@ -230,8 +232,16 @@ class WorkOrder(Base):
 def seed_customers_payload() -> list[dict[str, Any]]:
     return [
         {"name": "Acme Logistics", "email": "ops@acme.com", "company": "Acme Logistics Ltd"},
-        {"name": "Global Freight", "email": "ops@globalfreight.com", "company": "Global Freight Inc"},
-        {"name": "Rapid Transport", "email": "ops@rapidtransport.com", "company": "Rapid Transport Co"},
+        {
+            "name": "Global Freight",
+            "email": "ops@globalfreight.com",
+            "company": "Global Freight Inc",
+        },
+        {
+            "name": "Rapid Transport",
+            "email": "ops@rapidtransport.com",
+            "company": "Rapid Transport Co",
+        },
     ]
 
 
@@ -243,7 +253,12 @@ def seed_equipment_payload() -> list[dict[str, Any]]:
         {"depot_id": 2, "customer_id": 2, "name": "Pump Motor B2", "equipment_type": "Pump"},
         {"depot_id": 3, "customer_id": 2, "name": "Fan Motor C1", "equipment_type": "Fan"},
         {"depot_id": 3, "customer_id": 3, "name": "Compressor C2", "equipment_type": "Compressor"},
-        {"depot_id": 4, "customer_id": 3, "name": "Generator Motor D1", "equipment_type": "Generator"},
+        {
+            "depot_id": 4,
+            "customer_id": 3,
+            "name": "Generator Motor D1",
+            "equipment_type": "Generator",
+        },
         {"depot_id": 4, "customer_id": 1, "name": "Bearing Motor D2", "equipment_type": "Motor"},
     ]
 

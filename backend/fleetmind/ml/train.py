@@ -67,12 +67,16 @@ def load_depot_split(session: Session, depot_id: int, frac: float = 0.8, seed: i
     """
     all_rows = load_experiment_rows(session, depot_id)  # (experiment_id, values, label_index)
     exp_fault = {e: LABEL_MAP[lab] for e, _, lab in all_rows}
-    train_exp, val_exp = stratified_experiment_split(sorted(exp_fault.items()), frac=frac, seed=seed)
+    train_exp, val_exp = stratified_experiment_split(
+        sorted(exp_fault.items()), frac=frac, seed=seed
+    )
     se_train, se_val = set(train_exp), set(val_exp)
     from fleetmind.ml.model import to_fft_magnitude
+
     train_rows = [(to_fft_magnitude(v), lab) for e, v, lab in all_rows if e in se_train]
     val_rows = [(to_fft_magnitude(v), lab) for e, v, lab in all_rows if e in se_val]
     return train_rows, val_rows
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train local 1D-CNN for one depot.")

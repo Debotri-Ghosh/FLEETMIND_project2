@@ -94,9 +94,7 @@ class ProductSummary(BaseModel):
         description="Requests not in ('resolved', 'cancelled'), grouped by priority."
     )
     ai_flagged_open: int = Field(description="Open requests with agent_decision_id set.")
-    active_work_orders: int = Field(
-        description="Work orders not in ('completed', 'cancelled')."
-    )
+    active_work_orders: int = Field(description="Work orders not in ('completed', 'cancelled').")
 
 
 class Customer(BaseModel):

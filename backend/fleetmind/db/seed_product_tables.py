@@ -54,7 +54,7 @@ def main() -> None:
         if depot_id not in experiments_by_depot:
             experiments_by_depot[depot_id] = [
                 exp_id
-                for exp_id, in session.execute(
+                for (exp_id,) in session.execute(
                     select(Experiment.id)
                     .where(Experiment.depot_id == depot_id)
                     .order_by(Experiment.id)

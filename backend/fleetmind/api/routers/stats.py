@@ -38,7 +38,9 @@ def fault_distribution(db: Session = Depends(db_session.get_session)):
 def model_performance(db: Session = Depends(db_session.get_session)):
     """Real numbers from mlruns/ — see CLAUDE.md's "Real, current results" section.
     Not regenerated here; this just reads what train.py/federated/run.py already wrote."""
-    depot_names = dict(db.execute(select(Depot.id, Depot.name)).all())
+    depot_names: dict[int, str] = {
+        depot_id: name for depot_id, name in db.execute(select(Depot.id, Depot.name)).all()
+    }
 
     per_depot = []
     for depot_id in sorted(depot_names):
@@ -76,22 +78,26 @@ def model_performance(db: Session = Depends(db_session.get_session)):
 
 @router.get("/product-summary", response_model=ProductSummary)
 def product_summary(db: Session = Depends(db_session.get_session)):
-    equipment_by_status = dict(
-        db.execute(
+    equipment_by_status: dict[str, int] = {
+        status: n
+        for status, n in db.execute(
             select(Equipment.status, func.count()).group_by(Equipment.status)
         ).all()
-    )
+    }
 
-    open_requests_by_priority = dict(
-        db.execute(
+    open_requests_by_priority: dict[str, int] = {
+        priority: n
+        for priority, n in db.execute(
             select(ServiceRequest.priority, func.count())
             .where(ServiceRequest.status.in_(_OPEN_REQUEST_STATUSES))
             .group_by(ServiceRequest.priority)
         ).all()
-    )
+    }
 
     ai_flagged_open = db.execute(
-        select(func.count()).select_from(ServiceRequest).where(
+        select(func.count())
+        .select_from(ServiceRequest)
+        .where(
             ServiceRequest.status.in_(_OPEN_REQUEST_STATUSES),
             ServiceRequest.agent_decision_id.is_not(None),
         )

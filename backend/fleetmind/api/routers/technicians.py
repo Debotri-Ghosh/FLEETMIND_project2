@@ -12,9 +12,7 @@ router = APIRouter(prefix="/technicians", tags=["technicians"])
 
 
 @router.get("", response_model=list[TechnicianSchema])
-def list_technicians(
-    status: str | None = None, db: Session = Depends(db_session.get_session)
-):
+def list_technicians(status: str | None = None, db: Session = Depends(db_session.get_session)):
     query = select(TechnicianModel).order_by(TechnicianModel.id)
     if status is not None:
         query = query.where(TechnicianModel.status == status)

@@ -96,7 +96,9 @@ def product_session(db_engine):
         session.add(Depot(**row))
     session.flush()
 
-    session.add(Customer(id=1, name="Acme Logistics", email="ops@acme.com", company="Acme Logistics Ltd"))
+    session.add(
+        Customer(id=1, name="Acme Logistics", email="ops@acme.com", company="Acme Logistics Ltd")
+    )
     session.add(Technician(id=1, name="Alice Chen", phone="+1-555-0101", status="available"))
     session.flush()
 
