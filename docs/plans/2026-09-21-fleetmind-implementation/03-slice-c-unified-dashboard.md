@@ -52,16 +52,16 @@ FedProx mean baseline 60.0% vs mean final 42.9%).
 
 ### Frontend: partial-data and loading-state polish
 
-- [ ] `ModelAccuracyChart`: confirm the chart renders sensibly when `federated`
+- [x] `ModelAccuracyChart`: confirm the chart renders sensibly when `federated`
   is `null` but `per_depot` has data (single-series chart, no "Federated
   (FedProx)" bar or legend entry) — this path exists in the code
   (`{federated && <Bar .../>}`) but has not been screenshot-verified; do that.
-- [ ] `ProductKpiRow` / `ModelAccuracyChart`: both show a bare "Loading…" text
+- [x] `ProductKpiRow` / `ModelAccuracyChart`: both show a bare "Loading…" text
   line while fetching. Not a bug, but confirm it doesn't flash an
   empty/zero-value state before the real data arrives (i.e. `isLoading` is
   checked before rendering zeros) — verify by throttling the network in the
   browser check and screenshotting the loading state.
-- [ ] Numeric formatting: `gain_vs_baseline` is already correctly negative in
+- [x] Numeric formatting: `gain_vs_baseline` is already correctly negative in
   the real data (federated underperforms baseline) — confirm the dashboard
   doesn't imply this is an error (e.g. no red "down" styling that reads as
   broken) since CLAUDE.md is explicit this is a documented, expected finding,
@@ -80,3 +80,22 @@ FedProx mean baseline 60.0% vs mean final 42.9%).
   three depots without a full-page error.
 
 Record the exact commands and real output in `CLAUDE.md`'s Progress log.
+
+## Completed — 2026-09-22
+
+All items above are done. Commits `45d1c478` (backend: `_load_json_safe`,
+per-key `KeyError` handling, `federated["final"]` guard, 7 new tests) and
+`ac21b5af` (progress log). Frontend verification (no code changes needed,
+just confirmation) was done via Playwright route interception: mocking
+`/stats/model-performance` with `federated: null` shows a clean single-series
+chart with no "Federated (FedProx)" legend entry and no crash; delaying both
+stats responses by 3s and screenshotting mid-fetch confirms `isLoading` is
+checked before any zero-value tile renders (no premature "0" flash). The
+`gain_vs_baseline` caption text (`text-sm text-slate-500`, no red/error
+styling) reads as "a real, documented gap ... not a bug" regardless of sign —
+confirmed by inspection, no hardcoded negative-only wording. Live end-to-end
+check against the real backend: temporarily truncated the real
+`mlruns/depot_2/metrics.json` to invalid JSON, confirmed
+`GET /stats/model-performance` still returned depots 1/3/4 with `200` (not
+500), then restored the original file from a backup and confirmed all 4
+depots return correctly again via a follow-up request.
