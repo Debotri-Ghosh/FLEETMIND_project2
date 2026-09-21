@@ -32,7 +32,7 @@ from fleetmind.augmentation.sampling import denormalize, downsample, upsample
 from fleetmind.core.config import get_settings
 from fleetmind.db.models import Experiment, SignalWindow
 from fleetmind.db.session import create_db_engine, make_session_factory
-from fleetmind.ml.model import LABEL_MAP, BearingCNN
+from fleetmind.ml.model import LABEL_MAP, BearingCNN, class_weights, to_fft_magnitude
 
 MLRUNS = Path("mlruns")
 GAN_SEQ_LEN = 256
@@ -81,7 +81,10 @@ def train_cnn(train_rows: list, test_rows: list, epochs: int, bsz: int, lr: floa
     test_loader = DataLoader(_RowsDataset(test_rows), batch_size=bsz)
     model = BearingCNN(num_classes=len(LABEL_MAP))
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
-    loss_fn = nn.CrossEntropyLoss()
+    # FIX (2026-09-19): was nn.CrossEntropyLoss() with no weighting, which let
+    # the optimizer ignore InnerRace under real class imbalance -> 0.0 recall
+    # in every honest evaluation. See ml/model.py:class_weights.
+    loss_fn = nn.CrossEntropyLoss(weight=class_weights(train_rows, len(LABEL_MAP)))
     for _ in range(epochs):
         model.train()
         for xb, yb in train_loader:
@@ -186,6 +189,11 @@ def run_depot(
     se_train, se_test = set(train_exp), set(test_exp)
     train_rows = [(v, lab) for e, v, lab in all_rows if e in se_train]
     test_rows = [(v, lab) for e, v, lab in all_rows if e in se_test]
+    # FFT-magnitude classifier input (2026-09-19): fixes InnerRace<->OuterRace
+    # confusion. Kept separate from train_rows/test_rows (raw time-domain)
+    # because train_gan/generate_synthetic below need raw waveforms.
+    fft_train_rows = [(to_fft_magnitude(v), lab) for v, lab in train_rows]
+    fft_test_rows = [(to_fft_magnitude(v), lab) for v, lab in test_rows]
     counts = Counter(lab for _, lab in train_rows)
     majority = max(counts.values())
     needed = {c: majority - counts.get(c, 0) for c in range(len(LABEL_MAP))}
@@ -193,12 +201,13 @@ def run_depot(
     print(f"  train_exp={len(train_exp)} test_exp={len(test_exp)}")
     print(f"  train counts={[counts.get(c, 0) for c in range(len(LABEL_MAP))]}")
     print(f"  synthetic needed={[needed[c] for c in range(len(LABEL_MAP))]}")
-    _, baseline = train_cnn(train_rows, test_rows, epochs, bsz, lr, seed)
+    _, baseline = train_cnn(fft_train_rows, fft_test_rows, epochs, bsz, lr, seed)
     print(f"  baseline acc={baseline['accuracy']:.3f} recall={baseline['per_class_recall']}")
     gan, stats = train_gan(train_rows, gan_epochs, bsz, latent, seed)
     synth_rows = generate_synthetic(gan, stats, needed, seed)
     print(f"  generated {len(synth_rows)} synthetic windows")
-    _, augmented = train_cnn(train_rows + synth_rows, test_rows, epochs, bsz, lr, seed)
+    fft_synth_rows = [(to_fft_magnitude(v), lab) for v, lab in synth_rows]
+    _, augmented = train_cnn(fft_train_rows + fft_synth_rows, fft_test_rows, epochs, bsz, lr, seed)
     print(f"  augmented acc={augmented['accuracy']:.3f} recall={augmented['per_class_recall']}")
     out = out_dir or (MLRUNS / "augmentation" / f"depot_{depot_id}")
     out.mkdir(parents=True, exist_ok=True)

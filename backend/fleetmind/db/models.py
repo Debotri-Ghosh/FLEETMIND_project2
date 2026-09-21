@@ -23,7 +23,6 @@ from sqlalchemy.types import JSON
 
 from fleetmind.db.base import Base
 
-# JSONB on Postgres, plain JSON elsewhere (tests use sqlite).
 RawValuesType = JSON().with_variant(JSONB(), "postgresql")
 
 
@@ -107,8 +106,156 @@ class AgentDecision(Base):
     )
 
 
+class Customer(Base):
+    """Fleet manager / customer who owns equipment at depots."""
+
+    __tablename__ = "customers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    email: Mapped[str | None] = mapped_column(Text, unique=True)
+    company: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class Equipment(Base):
+    """A physical asset (motor / bearing) at a depot owned by a customer."""
+
+    __tablename__ = "equipment"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'maintenance', 'retired')",
+            name="ck_equipment_status",
+        ),
+        Index("idx_equipment_depot", "depot_id"),
+        Index("idx_equipment_customer", "customer_id"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
+    depot_id: Mapped[int] = mapped_column(ForeignKey("depots.id"), nullable=False)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    equipment_type: Mapped[str] = mapped_column(Text, nullable=False, default="Motor")
+    installed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    # Simulated link: CWRU has no real per-motor identity, so each equipment row
+    # is deterministically assigned one CWRU experiment (see agents/sync_equipment_status.py).
+    linked_experiment_id: Mapped[int | None] = mapped_column(ForeignKey("experiments.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class Technician(Base):
+    """Service technician available for dispatch."""
+
+    __tablename__ = "technicians"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('available', 'busy', 'offline')",
+            name="ck_technician_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    phone: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="available")
+
+
+class ServiceRequest(Base):
+    """Customer-reported issue."""
+
+    __tablename__ = "service_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "priority IN ('low', 'medium', 'high', 'critical')",
+            name="ck_service_requests_priority",
+        ),
+        CheckConstraint(
+            "status IN ('reported', 'diagnosed', 'dispatched', 'in_progress', 'resolved', 'cancelled')",
+            name="ck_service_requests_status",
+        ),
+        Index("idx_service_requests_customer", "customer_id"),
+        Index("idx_service_requests_depot", "depot_id"),
+        Index("idx_service_requests_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False)
+    depot_id: Mapped[int] = mapped_column(ForeignKey("depots.id"), nullable=False)
+    equipment_id: Mapped[int | None] = mapped_column(ForeignKey("equipment.id"))
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    priority: Mapped[str] = mapped_column(Text, nullable=False, default="medium")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="reported")
+    agent_decision_id: Mapped[int | None] = mapped_column(ForeignKey("agent_decisions.id"))
+    prediction_id: Mapped[int | None] = mapped_column(ForeignKey("model_predictions.id"))
+    technician_id: Mapped[int | None] = mapped_column(ForeignKey("technicians.id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class WorkOrder(Base):
+    """Technician dispatch tracking for a service request."""
+
+    __tablename__ = "work_orders"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('assigned', 'traveling', 'in_progress', 'completed', 'cancelled')",
+            name="ck_work_orders_status",
+        ),
+        UniqueConstraint("service_request_id", name="uq_work_orders_request"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
+    service_request_id: Mapped[int] = mapped_column(ForeignKey("service_requests.id"), nullable=False)
+    technician_id: Mapped[int] = mapped_column(ForeignKey("technicians.id"), nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="assigned")
+    location_lat: Mapped[float | None] = mapped_column(Float)
+    location_lng: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+def seed_customers_payload() -> list[dict[str, Any]]:
+    return [
+        {"name": "Acme Logistics", "email": "ops@acme.com", "company": "Acme Logistics Ltd"},
+        {"name": "Global Freight", "email": "ops@globalfreight.com", "company": "Global Freight Inc"},
+        {"name": "Rapid Transport", "email": "ops@rapidtransport.com", "company": "Rapid Transport Co"},
+    ]
+
+
+def seed_equipment_payload() -> list[dict[str, Any]]:
+    return [
+        {"depot_id": 1, "customer_id": 1, "name": "Bearing Motor A1", "equipment_type": "Motor"},
+        {"depot_id": 1, "customer_id": 1, "name": "Bearing Motor A2", "equipment_type": "Motor"},
+        {"depot_id": 2, "customer_id": 1, "name": "Conveyor Motor B1", "equipment_type": "Motor"},
+        {"depot_id": 2, "customer_id": 2, "name": "Pump Motor B2", "equipment_type": "Pump"},
+        {"depot_id": 3, "customer_id": 2, "name": "Fan Motor C1", "equipment_type": "Fan"},
+        {"depot_id": 3, "customer_id": 3, "name": "Compressor C2", "equipment_type": "Compressor"},
+        {"depot_id": 4, "customer_id": 3, "name": "Generator Motor D1", "equipment_type": "Generator"},
+        {"depot_id": 4, "customer_id": 1, "name": "Bearing Motor D2", "equipment_type": "Motor"},
+    ]
+
+
+def seed_technicians_payload() -> list[dict[str, Any]]:
+    return [
+        {"name": "Alice Chen", "phone": "+1-555-0101", "status": "available"},
+        {"name": "Bob Martinez", "phone": "+1-555-0102", "status": "available"},
+    ]
+
+
 def seed_depots_payload() -> list[dict[str, Any]]:
-    """The 4 real CWRU load levels -> 4 simulated depots."""
     return [
         {"name": "depot_0hp", "load_hp": 0, "nominal_rpm": 1797},
         {"name": "depot_1hp", "load_hp": 1, "nominal_rpm": 1772},

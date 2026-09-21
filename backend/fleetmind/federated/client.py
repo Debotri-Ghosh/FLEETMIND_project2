@@ -18,7 +18,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 
-from fleetmind.ml.model import LABEL_MAP, BearingCNN
+from fleetmind.ml.model import LABEL_MAP, BearingCNN, class_weights
 
 
 class _RowsDataset(Dataset):
@@ -66,7 +66,10 @@ def local_train(
     torch.manual_seed(seed)
     loader = DataLoader(_RowsDataset(train_rows), batch_size=batch_size, shuffle=True)
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
-    loss_fn = nn.CrossEntropyLoss()
+    # FIX (2026-09-19): unweighted loss let federated averaging collapse to
+    # always predicting the majority class (OuterRace) -- see ml/model.py:
+    # class_weights and federated/run.py's gain_vs_baseline going negative.
+    loss_fn = nn.CrossEntropyLoss(weight=class_weights(train_rows, len(LABEL_MAP)))
     global_params = [p.detach().clone() for p in model.parameters()] if mu > 0.0 else None
     total, n = 0.0, 0
     model.train()

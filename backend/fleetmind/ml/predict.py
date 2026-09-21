@@ -1,9 +1,4 @@
-"""Run trained per-depot CNN models on all windows, write ModelPrediction rows.
-
-Usage:
-    python -m fleetmind.ml.predict --depot-id 1
-    python -m fleetmind.ml.predict --all-depots
-"""
+"""Run trained per-depot CNN models on all windows, write ModelPrediction rows."""
 
 from __future__ import annotations
 
@@ -22,7 +17,7 @@ from fleetmind.db.models import (
     SignalWindow,
 )
 from fleetmind.db.session import create_db_engine, make_session_factory
-from fleetmind.ml.model import LABEL_MAP, BearingCNN
+from fleetmind.ml.model import LABEL_MAP, BearingCNN, to_fft_magnitude
 
 MLRUNS = Path("mlruns")
 
@@ -33,7 +28,6 @@ def predict_depot(depot_id: int, session, model_path: Path) -> int:
     model.load_state_dict(state)
     model.eval()
 
-    # Idempotent: delete existing predictions for this depot's windows
     depot_window_ids = (
         session.execute(
             select(SignalWindow.id)
@@ -44,7 +38,6 @@ def predict_depot(depot_id: int, session, model_path: Path) -> int:
         .all()
     )
     if depot_window_ids:
-        # Delete dependent agent_decisions first (FK cascade)
         session.execute(
             delete(AgentDecision).where(
                 AgentDecision.prediction_id.in_(
@@ -72,7 +65,8 @@ def predict_depot(depot_id: int, session, model_path: Path) -> int:
             values += [0.0] * (2048 - len(values))
         else:
             values = values[:2048]
-        x = torch.tensor(values, dtype=torch.float32).view(1, 1, 2048)
+        values = to_fft_magnitude(values)
+        x = torch.tensor(values, dtype=torch.float32).view(1, 1, -1)
         with torch.no_grad():
             logits = model(x)
             probs = torch.softmax(logits, 1).squeeze(0)

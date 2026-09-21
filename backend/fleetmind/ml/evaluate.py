@@ -2,6 +2,14 @@
 
 Usage:
     python -m fleetmind.ml.evaluate --depot-id 1
+
+FIX (2026-09-19): previously imported `load_depot_rows` + `stratified_split`
+from ml/train.py (a per-window random split, same seed as training), so this
+script's "test" set was literally identical to train.py's validation set --
+not a held-out set at all. It now reuses `load_depot_split`, the same
+experiment-level split train.py uses, calling it a second time with the same
+seed to regenerate the identical val_rows split deterministically (no need to
+persist indices separately).
 """
 
 from __future__ import annotations
@@ -16,7 +24,7 @@ from torch.utils.data import DataLoader
 from fleetmind.core.config import get_settings
 from fleetmind.db.session import create_db_engine, make_session_factory
 from fleetmind.ml.model import LABEL_MAP, BearingCNN
-from fleetmind.ml.train import _TorchDataset, load_depot_rows, stratified_split
+from fleetmind.ml.train import _TorchDataset, load_depot_split
 
 
 def evaluate(depot_id: int, checkpoint_dir: Path) -> dict:
@@ -25,12 +33,11 @@ def evaluate(depot_id: int, checkpoint_dir: Path) -> dict:
     factory = make_session_factory(engine)
     session = factory()
 
-    rows = load_depot_rows(session, depot_id)
+    _, val_rows = load_depot_split(session, depot_id, frac=0.8, seed=42)
     session.close()
-    if not rows:
-        raise SystemExit(f"No windows for depot_id={depot_id}")
+    if not val_rows:
+        raise SystemExit(f"No held-out windows for depot_id={depot_id}")
 
-    _, val_rows = stratified_split(rows, frac=0.8, seed=42)
     val_loader = DataLoader(_TorchDataset(val_rows), batch_size=64)
 
     model = BearingCNN(num_classes=len(LABEL_MAP))
@@ -58,6 +65,7 @@ def evaluate(depot_id: int, checkpoint_dir: Path) -> dict:
         "loss": loss_sum / total,
         "predictions": all_preds,
         "labels": all_labels,
+        "split": "experiment-level (fixed 2026-09-19)",
     }
     (checkpoint_dir / "test_results.json").write_text(json.dumps(results, indent=2))
     print(json.dumps(results, indent=2))

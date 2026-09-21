@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import {
   DepotTable,
   FaultDistributionChart,
+  Nav,
   SignalWaveform,
   StatusBanner,
 } from "./components";
@@ -98,7 +99,9 @@ function SignalViewer() {
 
 export default function DashboardPage() {
   return (
-    <main className="mx-auto max-w-6xl space-y-8 p-8">
+    <>
+      <Nav />
+      <main className="mx-auto max-w-6xl space-y-8 p-8">
       <header className="space-y-1">
         <h1 className="text-3xl font-bold">FleetMind</h1>
         <p className="text-slate-600">
@@ -129,6 +132,7 @@ export default function DashboardPage() {
       <footer className="pb-4 text-center text-xs text-slate-400">
         FleetMind · Debotri Ghosh (25MML1008) · M.Tech Project 2
       </footer>
-    </main>
+      </main>
+    </>
   );
 }

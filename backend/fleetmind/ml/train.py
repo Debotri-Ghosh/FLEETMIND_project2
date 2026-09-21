@@ -4,8 +4,17 @@ Usage:
     python -m fleetmind.ml.train --depot-id 1 --epochs 20 --batch-size 64
 
 Reads `signal_windows` joined to experiments->depots from Postgres,
-splits stratified 80/20 per depot, trains BearingCNN, and writes metrics +
-artifacts to mlruns/<depot_id>/.
+splits by EXPERIMENT (whole .mat recordings held out -- review-honest, see
+augmentation/exp_split.py), trains BearingCNN with class-weighted loss, and
+writes metrics + artifacts to mlruns/<depot_id>/.
+
+FIX (2026-09-19): this file previously split individual WINDOWS 80/20
+(`stratified_split`, now removed), so windows from the same recording could
+land on both sides of the split -- the model memorized recordings instead of
+learning to generalize, inflating val/test accuracy to 100%. It now reuses
+the same experiment-level split as augmentation/run.py and federated/run.py,
+and uses class-weighted CrossEntropyLoss (see ml/model.py:class_weights) to
+address the real class imbalance that unweighted loss was masking.
 """
 
 from __future__ import annotations
@@ -16,13 +25,14 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from fleetmind.augmentation.exp_split import stratified_experiment_split
+from fleetmind.augmentation.run import load_experiment_rows
 from fleetmind.core.config import get_settings
-from fleetmind.db.models import Depot, Experiment, SignalWindow
+from fleetmind.db.models import Depot
 from fleetmind.db.session import create_db_engine, make_session_factory
-from fleetmind.ml.model import LABEL_MAP, BearingCNN
+from fleetmind.ml.model import LABEL_MAP, BearingCNN, class_weights
 
 try:
     from torch.utils.data import DataLoader, Dataset
@@ -48,39 +58,21 @@ class _TorchDataset(Dataset):
         return x, label_index
 
 
-def load_depot_rows(session: Session, depot_id: int):
-    """Return [(values_list, label_index), ...] for all windows of a depot."""
-    rows = session.execute(
-        select(SignalWindow.raw_values, SignalWindow.label)
-        .join(Experiment, Experiment.id == SignalWindow.experiment_id)
-        .where(Experiment.depot_id == depot_id)
-        .order_by(SignalWindow.id)
-    ).all()
-    out = []
-    for raw_values, label in rows:
-        values = [float(v) for v in (raw_values or [])]
-        if label in LABEL_MAP:
-            out.append((values, LABEL_MAP.index(label)))
-    return out
+def load_depot_split(session: Session, depot_id: int, frac: float = 0.8, seed: int = 42):
+    """Experiment-level train/val split for a depot.
 
-
-def stratified_split(rows, frac=0.8, seed=42):
-    """Naive 80/20 split stratified by label index (keeps per-class ratio)."""
-    gen = torch.Generator().manual_seed(seed)
-    by_class: dict[int, list] = {}
-    for i, (_, label_index) in enumerate(rows):
-        by_class.setdefault(label_index, []).append(i)
-    train_idx, val_idx = [], []
-    for idxs in by_class.values():
-        perm = torch.tensor(idxs, dtype=torch.long)
-        perm = perm[torch.randperm(len(perm), generator=gen)]
-        cut = int(len(perm) * frac)
-        train_idx += perm[:cut].tolist()
-        val_idx += perm[cut:].tolist()
-    train = [rows[i] for i in train_idx]
-    val = [rows[i] for i in val_idx]
-    return train, val
-
+    Returns (train_rows, val_rows) as [(values, label_index), ...], using the
+    same stratified_experiment_split as augmentation/run.py so all training
+    paths in the repo agree on what "honest evaluation" means.
+    """
+    all_rows = load_experiment_rows(session, depot_id)  # (experiment_id, values, label_index)
+    exp_fault = {e: LABEL_MAP[lab] for e, _, lab in all_rows}
+    train_exp, val_exp = stratified_experiment_split(sorted(exp_fault.items()), frac=frac, seed=seed)
+    se_train, se_val = set(train_exp), set(val_exp)
+    from fleetmind.ml.model import to_fft_magnitude
+    train_rows = [(to_fft_magnitude(v), lab) for e, v, lab in all_rows if e in se_train]
+    val_rows = [(to_fft_magnitude(v), lab) for e, v, lab in all_rows if e in se_val]
+    return train_rows, val_rows
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train local 1D-CNN for one depot.")
@@ -98,26 +90,24 @@ def main() -> None:
     factory = make_session_factory(engine)
     session = factory()
 
-    rows = load_depot_rows(session, args.depot_id)
     depot_name = {d.id: d.name for d in session.query(Depot.id, Depot.name).all()}
+    train_rows, val_rows = load_depot_split(session, args.depot_id, frac=0.8, seed=args.seed)
     session.close()
 
-    if not rows:
+    if not train_rows:
         print(f"No signal_windows found for depot_id={args.depot_id}.")
         print("Run ingestion first: python -m fleetmind.ingestion.ingest")
         return
 
-    print(f"Depot {args.depot_id} ({depot_name.get(args.depot_id, '?')}): {len(rows)} windows")
-
-    train_rows, val_rows = stratified_split(rows, frac=0.8, seed=args.seed)
-    print(f"  train={len(train_rows)}  val={len(val_rows)}")
+    print(f"Depot {args.depot_id} ({depot_name.get(args.depot_id, '?')})")
+    print(f"  train={len(train_rows)}  val={len(val_rows)}  (experiment-level split)")
 
     train_loader = DataLoader(_TorchDataset(train_rows), batch_size=args.batch_size, shuffle=True)
     val_loader = DataLoader(_TorchDataset(val_rows), batch_size=args.batch_size)
 
     model = BearingCNN(num_classes=len(LABEL_MAP))
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    loss_fn = nn.CrossEntropyLoss()
+    loss_fn = nn.CrossEntropyLoss(weight=class_weights(train_rows, len(LABEL_MAP)))
 
     out_dir = MLRUNS / f"depot_{args.depot_id}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -151,6 +141,7 @@ def main() -> None:
         "epochs": args.epochs,
         "train_windows": len(train_rows),
         "val_windows": len(val_rows),
+        "split": "experiment-level (fixed 2026-09-19)",
     }
     (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
     print(f"Saved model + metrics to {out_dir.resolve()}")

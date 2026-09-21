@@ -5,7 +5,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from fleetmind.api.routers import depots, experiments, stats, windows
+from fleetmind.api.routers import (
+    customers,
+    depots,
+    equipment,
+    experiments,
+    service_requests,
+    stats,
+    technicians,
+    windows,
+    work_orders,
+)
 from fleetmind.core.config import get_settings
 from fleetmind.db import session as db_session
 from fleetmind.db.models import seed_depots_payload
@@ -22,7 +32,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST", "PATCH"],
         allow_headers=["*"],
     )
 
@@ -30,6 +40,11 @@ def create_app() -> FastAPI:
     app.include_router(experiments.router)
     app.include_router(windows.router)
     app.include_router(stats.router)
+    app.include_router(equipment.router)
+    app.include_router(service_requests.router)
+    app.include_router(work_orders.router)
+    app.include_router(customers.router)
+    app.include_router(technicians.router)
 
     @app.get("/health", tags=["system"])
     def health(db: Session = Depends(db_session.get_session)):

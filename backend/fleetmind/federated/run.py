@@ -41,7 +41,7 @@ from fleetmind.federated.client import (
     local_train,
     set_parameters,
 )
-from fleetmind.ml.model import LABEL_MAP, BearingCNN
+from fleetmind.ml.model import LABEL_MAP, BearingCNN, to_fft_magnitude
 
 MLRUNS = Path("mlruns")
 
@@ -94,8 +94,8 @@ def run_federated(
         )
         se_train, se_test = set(train_exp), set(test_exp)
         partitions[depot_id] = {
-            "train": [(v, lab) for e, v, lab in all_rows if e in se_train],
-            "test": [(v, lab) for e, v, lab in all_rows if e in se_test],
+            "train": [(to_fft_magnitude(v), lab) for e, v, lab in all_rows if e in se_train],
+            "test": [(to_fft_magnitude(v), lab) for e, v, lab in all_rows if e in se_test],
         }
         counts = Counter(lab for _, lab in partitions[depot_id]["train"])
         print(
