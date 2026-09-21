@@ -196,3 +196,119 @@ def test_list_work_orders_filters(product_client):
     assert len(product_client.get("/work-orders", params={"technician_id": 1}).json()) == 1
     assert product_client.get("/work-orders", params={"technician_id": 999}).json() == []
     assert len(product_client.get("/work-orders", params={"status": "assigned"}).json()) == 1
+
+
+# --- Hardening: bad input on POST /service-requests --------------------------
+
+
+def test_create_service_request_invalid_customer_id_404(product_client):
+    resp = product_client.post(
+        "/service-requests", json={"customer_id": 999, "depot_id": 1, "title": "Noise"}
+    )
+    assert resp.status_code == 404
+    assert "customer" in resp.json()["detail"]
+
+
+def test_create_service_request_invalid_depot_id_404(product_client):
+    resp = product_client.post(
+        "/service-requests", json={"customer_id": 1, "depot_id": 999, "title": "Noise"}
+    )
+    assert resp.status_code == 404
+    assert "depot" in resp.json()["detail"]
+
+
+def test_create_service_request_invalid_equipment_id_404(product_client):
+    resp = product_client.post(
+        "/service-requests",
+        json={"customer_id": 1, "depot_id": 1, "equipment_id": 999, "title": "Noise"},
+    )
+    assert resp.status_code == 404
+    assert "equipment" in resp.json()["detail"]
+
+
+def test_create_service_request_equipment_depot_mismatch_422(product_client):
+    # Equipment 1 (from product_session) belongs to depot_id=1; naming depot_id=2
+    # alongside it is inconsistent client data. Reasoned default: reject (422)
+    # rather than silently trusting either field -- see the comment in
+    # service_requests.py:create_service_request.
+    resp = product_client.post(
+        "/service-requests",
+        json={"customer_id": 1, "depot_id": 2, "equipment_id": 1, "title": "Noise"},
+    )
+    assert resp.status_code == 422
+    assert "depot" in resp.json()["detail"]
+
+
+# --- Hardening: bad input on POST /work-orders and status transitions --------
+
+
+def test_create_work_order_missing_technician_404(product_client):
+    sr = product_client.post(
+        "/service-requests", json={"customer_id": 1, "depot_id": 1, "title": "Noise"}
+    ).json()
+    resp = product_client.post(
+        "/work-orders", json={"service_request_id": sr["id"], "technician_id": 999}
+    )
+    assert resp.status_code == 404
+    assert "technician" in resp.json()["detail"]
+
+
+def test_create_work_order_double_dispatch_409(product_client):
+    sr = product_client.post(
+        "/service-requests", json={"customer_id": 1, "depot_id": 1, "title": "Noise"}
+    ).json()
+    first = product_client.post(
+        "/work-orders", json={"service_request_id": sr["id"], "technician_id": 1}
+    )
+    assert first.status_code == 201
+    first_id = first.json()["id"]
+
+    second = product_client.post(
+        "/work-orders", json={"service_request_id": sr["id"], "technician_id": 1}
+    )
+    assert second.status_code == 409
+    assert str(first_id) in second.json()["detail"]
+
+
+def test_work_order_status_allows_any_transition(product_client):
+    """Documents current, intentionally permissive behavior: no transition-graph
+    validation, so ops can correct a mistake without a support ticket. A future
+    change here should be a conscious decision, not an accidental regression."""
+    sr = product_client.post(
+        "/service-requests", json={"customer_id": 1, "depot_id": 1, "title": "Noise"}
+    ).json()
+    wo = product_client.post(
+        "/work-orders", json={"service_request_id": sr["id"], "technician_id": 1}
+    ).json()
+
+    resp = product_client.patch(f"/work-orders/{wo['id']}/status", json={"status": "completed"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "completed"
+
+    # "backwards" transition, completed -> assigned
+    resp = product_client.patch(f"/work-orders/{wo['id']}/status", json={"status": "assigned"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "assigned"
+
+    # setting the same status twice
+    resp = product_client.patch(f"/work-orders/{wo['id']}/status", json={"status": "assigned"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "assigned"
+
+
+# --- Hardening: limit bounds ---------------------------------------------
+
+
+def test_equipment_limit_zero_rejected(product_client):
+    resp = product_client.get("/equipment", params={"limit": 0})
+    assert resp.status_code == 422
+
+
+def test_service_requests_limit_zero_rejected(product_client):
+    resp = product_client.get("/service-requests", params={"limit": 0})
+    assert resp.status_code == 422
+
+
+def test_work_orders_limit_negative_rejected(product_client):
+    resp = product_client.get("/work-orders", params={"limit": -1})
+    assert resp.status_code == 422

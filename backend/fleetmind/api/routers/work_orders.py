@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from fleetmind.api.schemas import WorkOrder as WorkOrderSchema
 from fleetmind.api.schemas import WorkOrderCreate, WorkOrderStatusUpdate
 from fleetmind.db import session as db_session
-from fleetmind.db.models import ServiceRequest, WorkOrder
+from fleetmind.db.models import ServiceRequest, Technician, WorkOrder
 
 router = APIRouter(prefix="/work-orders", tags=["work-orders"])
 
@@ -22,7 +22,7 @@ def list_work_orders(
     technician_id: int | None = None,
     status: str | None = None,
     service_request_id: int | None = None,
-    limit: int = Query(default=100, le=500),
+    limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(db_session.get_session),
 ):
     query = select(WorkOrder).order_by(WorkOrder.id.desc()).limit(limit)
@@ -48,6 +48,22 @@ def create_work_order(payload: WorkOrderCreate, db: Session = Depends(db_session
     service_request = db.get(ServiceRequest, payload.service_request_id)
     if service_request is None:
         raise HTTPException(status_code=404, detail="service request not found")
+    if db.get(Technician, payload.technician_id) is None:
+        raise HTTPException(status_code=404, detail=f"technician {payload.technician_id} not found")
+
+    # service_request_id has a unique constraint (one work order per request).
+    # Check for an existing work order before the insert so a double-dispatch
+    # surfaces as a clean 409 instead of an unhandled IntegrityError -> 500.
+    existing = db.scalar(
+        select(WorkOrder).where(WorkOrder.service_request_id == payload.service_request_id)
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"service request {payload.service_request_id} already has work order {existing.id}"
+            ),
+        )
 
     result = db.execute(insert(WorkOrder).values(**payload.model_dump()))
     db.execute(
@@ -65,6 +81,13 @@ def update_work_order_status(
     payload: WorkOrderStatusUpdate,
     db: Session = Depends(db_session.get_session),
 ):
+    # No transition-graph validation here: any status -> any other status is
+    # allowed, including "backwards" moves (completed -> assigned) and setting
+    # the same status twice. Reasoned default: field ops need to correct a
+    # mis-click or a bad dispatch without filing a support ticket, and there's
+    # no safety-critical invariant a backwards transition could violate here.
+    # This is a conscious choice, not an oversight -- see
+    # test_work_order_status_allows_any_transition for the behavior this locks in.
     work_order = db.get(WorkOrder, work_order_id)
     if work_order is None:
         raise HTTPException(status_code=404, detail="work order not found")

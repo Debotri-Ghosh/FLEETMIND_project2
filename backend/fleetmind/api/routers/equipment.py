@@ -17,7 +17,7 @@ def list_equipment(
     depot_id: int | None = None,
     customer_id: int | None = None,
     status: str | None = None,
-    limit: int = Query(default=100, le=500),
+    limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(db_session.get_session),
 ):
     query = select(EquipmentModel).order_by(EquipmentModel.id).limit(limit)

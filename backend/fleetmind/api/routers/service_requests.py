@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from fleetmind.api.schemas import ServiceRequest as ServiceRequestSchema
 from fleetmind.api.schemas import ServiceRequestCreate
 from fleetmind.db import session as db_session
-from fleetmind.db.models import AgentDecision, ModelPrediction
+from fleetmind.db.models import AgentDecision, Customer, Depot, Equipment, ModelPrediction
 from fleetmind.db.models import ServiceRequest as ServiceRequestModel
 
 router = APIRouter(prefix="/service-requests", tags=["service-requests"])
@@ -47,7 +47,7 @@ def list_service_requests(
     equipment_id: int | None = None,
     status: str | None = None,
     ai_flagged: bool | None = None,
-    limit: int = Query(default=100, le=500),
+    limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(db_session.get_session),
 ):
     query = _select_with_agent_context().order_by(ServiceRequestModel.id.desc()).limit(limit)
@@ -80,6 +80,30 @@ def get_service_request(request_id: int, db: Session = Depends(db_session.get_se
 def create_service_request(
     payload: ServiceRequestCreate, db: Session = Depends(db_session.get_session)
 ):
+    if db.get(Customer, payload.customer_id) is None:
+        raise HTTPException(status_code=404, detail=f"customer {payload.customer_id} not found")
+    if db.get(Depot, payload.depot_id) is None:
+        raise HTTPException(status_code=404, detail=f"depot {payload.depot_id} not found")
+    if payload.equipment_id is not None:
+        equipment = db.get(Equipment, payload.equipment_id)
+        if equipment is None:
+            raise HTTPException(
+                status_code=404, detail=f"equipment {payload.equipment_id} not found"
+            )
+        # Every piece of equipment belongs to exactly one depot. A request that
+        # names an equipment_id and a depot_id that disagree is inconsistent
+        # client data, not merely "not found" -- we reject it (422) rather than
+        # silently trusting whichever field or silently overwriting depot_id
+        # with the equipment's real depot, since either would hide a client bug.
+        if equipment.depot_id != payload.depot_id:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"equipment {payload.equipment_id} belongs to depot "
+                    f"{equipment.depot_id}, not depot {payload.depot_id}"
+                ),
+            )
+
     result = db.execute(insert(ServiceRequestModel).values(**payload.model_dump()))
     db.commit()
     request = db.get(ServiceRequestModel, result.inserted_primary_key[0])
