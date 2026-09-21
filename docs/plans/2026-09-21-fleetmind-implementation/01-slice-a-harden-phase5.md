@@ -35,7 +35,7 @@ closes the gaps a real user (or a flaky network, or a double-click) would hit.
 
 ### Backend: reject bad input cleanly instead of a raw 500
 
-- [ ] `POST /service-requests` (`api/routers/service_requests.py`): the current
+- [x] `POST /service-requests` (`api/routers/service_requests.py`): the current
   implementation does a raw `insert()` with whatever `customer_id`/`depot_id`/
   `equipment_id` the client sends, with no existence check. An invalid
   `customer_id` or `depot_id` currently either violates a DB foreign-key
@@ -48,7 +48,7 @@ closes the gaps a real user (or a flaky network, or a double-click) would hit.
   valid equipment_id from a *different* depot than the one given -> decide and
   document the behavior (reject as inconsistent, or allow — pick one, note the
   reasoning in a code comment, this is a technical call, not a product one).
-- [ ] `POST /work-orders` (`api/routers/work_orders.py`): already checks the
+- [x] `POST /work-orders` (`api/routers/work_orders.py`): already checks the
   `service_request_id` exists, but not `technician_id`. Add the same existence
   check, `404` on missing technician. Also: `WorkOrder` has a unique constraint
   on `service_request_id`, so creating a second work order for an
@@ -57,21 +57,21 @@ closes the gaps a real user (or a flaky network, or a double-click) would hit.
   work order on that service_request_id first) and return `409 Conflict` with a
   message pointing at the existing work order's id. Add tests for both: missing
   technician -> 404, double-dispatch -> 409.
-- [ ] `PATCH /work-orders/{id}/status`: no validation that the transition makes
+- [x] `PATCH /work-orders/{id}/status`: no validation that the transition makes
   sense (e.g. `completed` -> `assigned` backwards, or setting the same status
   twice). Decide: is this a real bug worth blocking, or intentionally permissive
   for manual correction? Reasoned default: **allow any transition** (ops need to
   correct mistakes without a support ticket) but add a test documenting the
   current permissive behavior explicitly, so a future change here is a
   conscious decision, not an accidental regression.
-- [ ] `GET` list endpoints with a `limit` query param (`equipment`,
+- [x] `GET` list endpoints with a `limit` query param (`equipment`,
   `service-requests`, `work-orders`): confirm `limit=0` and negative `limit`
   are rejected by FastAPI/Pydantic's `Query(default=100, le=500)` — add a `ge=1`
   bound and a test for `limit=0` -> 422.
 
 ### Frontend: handle the network/empty/error paths, not just the happy path
 
-- [ ] `frontend/src/app/customer/page.tsx`: the "File a Service Request" form
+- [x] `frontend/src/app/customer/page.tsx`: the "File a Service Request" form
   has no client-side required-field validation beyond the `<select>`'s native
   `disabled` placeholder — an empty title currently either silently fails
   server-side (schema requires `title: str`, so FastAPI returns 422) or, worse,
@@ -80,22 +80,22 @@ closes the gaps a real user (or a flaky network, or a double-click) would hit.
   inline error if the mutation fails (currently a failed `createServiceRequest`
   mutation has no error UI at all — check `useMutation`'s `isError` state and
   show something better than a silent no-op).
-- [ ] Same page: after the FK-validation hardening above lands on the backend,
+- [x] Same page: after the FK-validation hardening above lands on the backend,
   the equipment dropdown could reference stale equipment (e.g. retired between
   page load and submit). Confirm the form surfaces the resulting 404 as a
   visible error rather than swallowing it.
-- [ ] `frontend/src/app/operator/page.tsx`'s `DispatchQueue`: dispatching with
+- [x] `frontend/src/app/operator/page.tsx`'s `DispatchQueue`: dispatching with
   no technicians available (`technicians.data` empty) currently renders a
   `<select>` with only the disabled placeholder option and an always-enabled
   "Dispatch" button gated on `selectedTechnician[r.id]` being falsy — confirm
   this can't submit an invalid dispatch, and add a visible "No technicians
   available" message instead of a silently empty dropdown.
-- [ ] All three pages: `useQuery`'s `isError` branches currently render a bare
+- [x] All three pages: `useQuery`'s `isError` branches currently render a bare
   one-line red message with no retry action. Add a "Retry" button (React
   Query's `refetch()`) to at least the top-level page-critical queries (depots,
   equipment board, service requests) so a transient network blip doesn't require
   a full page reload.
-- [ ] Confirm CORS/API-unreachable behavior end to end: stop the backend, load
+- [x] Confirm CORS/API-unreachable behavior end to end: stop the backend, load
   each page, confirm the existing `StatusBanner` / per-section error states
   degrade gracefully (no uncaught exceptions, no infinite loading spinners).
   This exercises the actual failure mode a demo laptop's flaky network would hit.
