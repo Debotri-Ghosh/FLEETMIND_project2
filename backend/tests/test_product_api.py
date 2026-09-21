@@ -312,3 +312,61 @@ def test_service_requests_limit_zero_rejected(product_client):
 def test_work_orders_limit_negative_rejected(product_client):
     resp = product_client.get("/work-orders", params={"limit": -1})
     assert resp.status_code == 422
+
+
+# --- Slice B hardening: null risk_score, and dispatching an AI request twice -
+
+
+def test_ai_flagged_request_with_null_risk_score_serializes_as_null(
+    product_client, product_session
+):
+    """AgentDecision.risk_score is nullable in the schema -- confirm the API
+    response carries agent_risk_score through as JSON null (not a crash, and
+    not e.g. 0 or a missing key) when the underlying decision has no risk
+    score, since the frontend AiFlaggedPanel keys its `-- vs. NaN%` guard on
+    `!== null` specifically."""
+    from fleetmind.db.models import AgentDecision
+
+    decision = product_session.query(AgentDecision).one()
+    decision.risk_score = None
+    product_session.commit()
+
+    from fleetmind.agents.sync_equipment_status import sync_equipment_status
+
+    sync_equipment_status(product_session)
+
+    resp = product_client.get("/service-requests", params={"ai_flagged": True})
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    assert rows[0]["agent_risk_score"] is None
+    assert rows[0]["agent_decision_text"] == "[HIGH] elevated fault repetition rate"
+
+    detail = product_client.get(f"/service-requests/{rows[0]['id']}").json()
+    assert detail["agent_risk_score"] is None
+
+
+def test_dispatching_ai_flagged_request_twice_is_409_not_500(product_client, product_session):
+    """The double-dispatch 409 guard in create_work_order (Slice A hardening)
+    goes through the same endpoint regardless of who filed the service
+    request -- confirm it also covers an AI-filed (agent_decision_id set)
+    request specifically, not just a customer-filed one."""
+    from fleetmind.agents.sync_equipment_status import sync_equipment_status
+
+    sync_equipment_status(product_session)
+
+    ai_requests = product_client.get("/service-requests", params={"ai_flagged": True}).json()
+    assert len(ai_requests) == 1
+    request_id = ai_requests[0]["id"]
+
+    first = product_client.post(
+        "/work-orders", json={"service_request_id": request_id, "technician_id": 1}
+    )
+    assert first.status_code == 201
+    first_id = first.json()["id"]
+
+    second = product_client.post(
+        "/work-orders", json={"service_request_id": request_id, "technician_id": 1}
+    )
+    assert second.status_code == 409
+    assert str(first_id) in second.json()["detail"]

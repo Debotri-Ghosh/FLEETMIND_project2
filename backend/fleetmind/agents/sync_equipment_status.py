@@ -34,6 +34,7 @@ import argparse
 import re
 
 from sqlalchemy import insert, select, update
+from sqlalchemy.exc import IntegrityError
 
 from fleetmind.db.models import (
     AgentDecision,
@@ -95,7 +96,8 @@ def _ensure_ai_service_request(
     """Creates an AI-filed ServiceRequest for this equipment if none is
     currently open. Returns the urgency it filed at, or None if it left
     things alone (an open AI request already exists, or there's no tagged
-    decision to file from)."""
+    decision to file from, or a concurrent run already won the race -- see
+    the IntegrityError handling below)."""
     already_open = session.execute(
         select(ServiceRequest.id).where(
             ServiceRequest.equipment_id == equip_id,
@@ -112,22 +114,38 @@ def _ensure_ai_service_request(
     decision_id, urgency, prediction_id = worst_decision
 
     if not dry_run:
-        session.execute(
-            insert(ServiceRequest).values(
-                customer_id=customer_id,
-                depot_id=depot_id,
-                equipment_id=equip_id,
-                title=f"AI-flagged: {urgency.title()} urgency detected",
-                description=(
-                    f"Automatically filed by the agent pipeline after a {urgency} "
-                    "risk decision from the diagnosis/risk agent chain."
-                ),
-                priority=urgency.lower(),
-                status="reported",
-                agent_decision_id=decision_id,
-                prediction_id=prediction_id,
-            )
-        )
+        # Two concurrent sync runs can both pass the "already_open" read-check
+        # above before either commits. The partial unique index
+        # (uq_service_requests_open_ai_request, see db/models.py and alembic
+        # migration 0003) makes the DB itself reject the loser's insert. Do
+        # that insert inside a SAVEPOINT (session.begin_nested()) so a caught
+        # IntegrityError only unwinds this one insert, not every change this
+        # sync run has staged so far for other equipment in the same
+        # transaction -- without the savepoint, Postgres would mark the whole
+        # outer transaction as aborted and the caller's eventual commit()
+        # would fail or lose unrelated work.
+        try:
+            with session.begin_nested():
+                session.execute(
+                    insert(ServiceRequest).values(
+                        customer_id=customer_id,
+                        depot_id=depot_id,
+                        equipment_id=equip_id,
+                        title=f"AI-flagged: {urgency.title()} urgency detected",
+                        description=(
+                            f"Automatically filed by the agent pipeline after a {urgency} "
+                            "risk decision from the diagnosis/risk agent chain."
+                        ),
+                        priority=urgency.lower(),
+                        status="reported",
+                        agent_decision_id=decision_id,
+                        prediction_id=prediction_id,
+                    )
+                )
+        except IntegrityError:
+            # Someone else (a concurrent run) already filed it. That's fine --
+            # treat exactly like the already_open check above finding one.
+            return None
     return urgency
 
 
@@ -197,9 +215,20 @@ def main() -> None:
     session = factory()
 
     filed_requests: list[tuple[str, str]] = []
-    changes = sync_equipment_status(
-        session, dry_run=args.dry_run, filed_requests_log=filed_requests
-    )
+    try:
+        changes = sync_equipment_status(
+            session, dry_run=args.dry_run, filed_requests_log=filed_requests
+        )
+    except Exception:
+        # Nothing in this run has been committed yet (commit() only happens
+        # below, after the whole loop finishes) -- but roll back explicitly
+        # rather than relying on the process exit / GC to eventually close the
+        # connection, so a mid-loop failure (e.g. the DB going away) is a
+        # clean, non-corrupting error: no partial commits, and the next run
+        # starts from the same state as before this one.
+        session.rollback()
+        session.close()
+        raise
 
     if not changes:
         print("No status changes.")

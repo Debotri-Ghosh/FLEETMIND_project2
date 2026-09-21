@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -181,6 +182,27 @@ class ServiceRequest(Base):
         Index("idx_service_requests_customer", "customer_id"),
         Index("idx_service_requests_depot", "depot_id"),
         Index("idx_service_requests_status", "status"),
+        # Partial unique index: at most one *open*, AI-filed service request per
+        # equipment. Prevents a race between two concurrent
+        # sync_equipment_status runs (see agents/sync_equipment_status.py:
+        # _ensure_ai_service_request) from both passing the "already has an
+        # open AI-filed request" read-check before either commits, which would
+        # otherwise file two AI requests for the same equipment. Declared here
+        # (not only in alembic/versions/0003_...) so the sqlite test DB, which
+        # is built from Base.metadata.create_all rather than migrations, also
+        # enforces it -- see tests/test_sync_equipment_status.py for the race
+        # test exercising this for real against sqlite.
+        Index(
+            "uq_service_requests_open_ai_request",
+            "equipment_id",
+            unique=True,
+            postgresql_where=text(
+                "agent_decision_id IS NOT NULL AND status NOT IN ('resolved', 'cancelled')"
+            ),
+            sqlite_where=text(
+                "agent_decision_id IS NOT NULL AND status NOT IN ('resolved', 'cancelled')"
+            ),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
