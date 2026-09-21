@@ -125,3 +125,32 @@ export interface WorkOrder {
   started_at: string | null;
   completed_at: string | null;
 }
+
+export interface DepotModelMetrics {
+  depot_id: number;
+  depot_name: string;
+  best_val_acc: number;
+  train_windows: number;
+  val_windows: number;
+}
+
+export interface FederatedSummary {
+  strategy: string;
+  rounds: number;
+  mean_baseline_accuracy: number;
+  mean_final_accuracy: number;
+  gain_vs_baseline: number;
+  per_depot_final_accuracy: Record<string, number>;
+}
+
+export interface ModelPerformance {
+  per_depot: DepotModelMetrics[];
+  federated: FederatedSummary | null;
+}
+
+export interface ProductSummary {
+  equipment_by_status: Record<string, number>;
+  open_requests_by_priority: Record<string, number>;
+  ai_flagged_open: number;
+  active_work_orders: number;
+}

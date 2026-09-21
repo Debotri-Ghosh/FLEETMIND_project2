@@ -52,6 +52,10 @@ export const api = {
     getJson<import("./types").WindowDetail>(`/signal-window/${windowId}`),
   faultDistribution: () =>
     getJson<import("./types").FaultDistributionEntry[]>("/stats/fault-distribution"),
+  modelPerformance: () =>
+    getJson<import("./types").ModelPerformance>("/stats/model-performance"),
+  productSummary: () =>
+    getJson<import("./types").ProductSummary>("/stats/product-summary"),
   customers: () => getJson<import("./types").Customer[]>("/customers"),
   technicians: (params?: { status?: string }) =>
     getJson<import("./types").Technician[]>(

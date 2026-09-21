@@ -6,7 +6,9 @@ import { api } from "@/lib/api";
 import {
   DepotTable,
   FaultDistributionChart,
+  ModelAccuracyChart,
   Nav,
+  ProductKpiRow,
   SignalWaveform,
   StatusBanner,
 } from "./components";
@@ -111,6 +113,22 @@ export default function DashboardPage() {
       </header>
 
       <StatusBanner />
+
+      <section className="rounded-xl bg-white p-6 shadow">
+        <h2 className="mb-4 text-xl font-semibold">System Overview</h2>
+        <ProductKpiRow />
+      </section>
+
+      <section className="rounded-xl bg-white p-6 shadow">
+        <div className="mb-4">
+          <h2 className="text-xl font-semibold">Model Performance: Local vs. Federated</h2>
+          <p className="text-sm text-slate-500">
+            Honest, experiment-level-split results — each depot&apos;s own classifier vs. the
+            same architecture trained with FedProx across all 4 depots.
+          </p>
+        </div>
+        <ModelAccuracyChart />
+      </section>
 
       <section className="rounded-xl bg-white p-6 shadow">
         <h2 className="mb-4 text-xl font-semibold">

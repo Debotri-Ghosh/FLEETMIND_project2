@@ -175,6 +175,110 @@ export function FaultDistributionChart() {
   );
 }
 
+function StatTile({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: number | string;
+  accent?: string;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 p-4">
+      <p className="text-sm text-slate-500">{label}</p>
+      <p className={`text-2xl font-semibold ${accent ?? "text-slate-900"}`}>{value}</p>
+    </div>
+  );
+}
+
+export function ProductKpiRow() {
+  const summary = useQuery({ queryKey: ["product-summary"], queryFn: api.productSummary });
+
+  if (summary.isLoading) return <p className="text-slate-500">Loading product KPIs…</p>;
+  if (summary.isError) return <p className="text-red-600">Failed to load product KPIs.</p>;
+
+  const eq = summary.data?.equipment_by_status ?? {};
+  const openByPriority = summary.data?.open_requests_by_priority ?? {};
+  const totalOpenRequests = Object.values(openByPriority).reduce((a, b) => a + b, 0);
+
+  return (
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+      <StatTile label="Active Equipment" value={eq.active ?? 0} />
+      <StatTile
+        label="Flagged for Maintenance"
+        value={eq.maintenance ?? 0}
+        accent={eq.maintenance ? "text-amber-700" : undefined}
+      />
+      <StatTile label="Open Service Requests" value={totalOpenRequests} />
+      <StatTile
+        label="AI-Flagged (open)"
+        value={summary.data?.ai_flagged_open ?? 0}
+        accent={summary.data?.ai_flagged_open ? "text-orange-700" : undefined}
+      />
+      <StatTile label="Active Work Orders" value={summary.data?.active_work_orders ?? 0} />
+      <StatTile
+        label="Critical Priority (open)"
+        value={openByPriority.critical ?? 0}
+        accent={openByPriority.critical ? "text-red-700" : undefined}
+      />
+    </div>
+  );
+}
+
+export function ModelAccuracyChart() {
+  const perf = useQuery({ queryKey: ["model-performance"], queryFn: api.modelPerformance });
+
+  if (perf.isLoading) return <p className="text-slate-500">Loading model performance…</p>;
+  if (perf.isError) return <p className="text-red-600">Failed to load model performance.</p>;
+  if (!perf.data?.per_depot.length)
+    return (
+      <p className="text-slate-500">
+        No training runs found in mlruns/ yet — run <code>python -m fleetmind.ml.train</code>.
+      </p>
+    );
+
+  const federated = perf.data.federated;
+  const chartData = perf.data.per_depot.map((d) => ({
+    name: d.depot_name,
+    "Local baseline": Math.round(d.best_val_acc * 1000) / 10,
+    ...(federated
+      ? {
+          "Federated (FedProx)":
+            Math.round(
+              (federated.per_depot_final_accuracy[String(d.depot_id)] ?? 0) * 1000
+            ) / 10,
+        }
+      : {}),
+  }));
+
+  return (
+    <div className="space-y-3">
+      <ResponsiveContainer width="100%" height={280}>
+        <BarChart data={chartData}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e1e0d9" />
+          <XAxis dataKey="name" />
+          <YAxis unit="%" domain={[0, 100]} />
+          <Tooltip formatter={(v: number) => `${v}%`} />
+          <Legend />
+          <Bar dataKey="Local baseline" fill="#2563eb" radius={[4, 4, 0, 0]} />
+          {federated && (
+            <Bar dataKey="Federated (FedProx)" fill="#eb6834" radius={[4, 4, 0, 0]} />
+          )}
+        </BarChart>
+      </ResponsiveContainer>
+      {federated && (
+        <p className="text-sm text-slate-500">
+          {federated.strategy.toUpperCase()} over {federated.rounds} rounds: mean local baseline{" "}
+          {(federated.mean_baseline_accuracy * 100).toFixed(1)}% vs. mean federated{" "}
+          {(federated.mean_final_accuracy * 100).toFixed(1)}% — a real, documented gap from
+          federated averaging under per-depot class imbalance, not a bug.
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function SignalWaveform({ windowId }: { windowId: number }) {
   const windowDetail = useQuery({
     queryKey: ["signal-window", windowId],

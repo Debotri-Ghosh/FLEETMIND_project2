@@ -57,6 +57,48 @@ class FaultDistributionEntry(BaseModel):
     n_windows: int
 
 
+class DepotModelMetrics(BaseModel):
+    depot_id: int
+    depot_name: str
+    best_val_acc: float
+    train_windows: int
+    val_windows: int
+
+
+class FederatedSummary(BaseModel):
+    strategy: str
+    rounds: int
+    mean_baseline_accuracy: float
+    mean_final_accuracy: float
+    gain_vs_baseline: float
+    per_depot_final_accuracy: dict[int, float] = Field(
+        description="Federated (post-training) accuracy per depot, for comparison against "
+        "each depot's own local-baseline best_val_acc in per_depot."
+    )
+
+
+class ModelPerformance(BaseModel):
+    per_depot: list[DepotModelMetrics] = Field(
+        description="Honest, experiment-level-split per-depot classifier results from mlruns/."
+    )
+    federated: FederatedSummary | None = Field(
+        default=None,
+        description="FedProx federated-learning summary from mlruns/federated/fedprox/, "
+        "or null if that run hasn't been produced.",
+    )
+
+
+class ProductSummary(BaseModel):
+    equipment_by_status: dict[str, int]
+    open_requests_by_priority: dict[str, int] = Field(
+        description="Requests not in ('resolved', 'cancelled'), grouped by priority."
+    )
+    ai_flagged_open: int = Field(description="Open requests with agent_decision_id set.")
+    active_work_orders: int = Field(
+        description="Work orders not in ('completed', 'cancelled')."
+    )
+
+
 class Customer(BaseModel):
     id: int
     name: str
