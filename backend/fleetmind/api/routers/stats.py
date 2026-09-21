@@ -1,6 +1,7 @@
 """Aggregate statistics endpoints."""
 
 import json
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
@@ -16,6 +17,8 @@ from fleetmind.api.schemas import (
 )
 from fleetmind.db import session as db_session
 from fleetmind.db.models import Depot, Equipment, ServiceRequest, SignalWindow, WorkOrder
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -34,6 +37,18 @@ def fault_distribution(db: Session = Depends(db_session.get_session)):
     return [FaultDistributionEntry(label=label, n_windows=n) for label, n in rows]
 
 
+def _load_json_safe(path: Path) -> dict | None:
+    """Reads and parses a JSON file, returning None (and logging a warning)
+    instead of raising on a missing/unreadable/corrupted file -- one bad
+    training-run artifact should never 500 an endpoint that has other, good
+    data to show."""
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Skipping unreadable mlruns file %s: %s", path, exc)
+        return None
+
+
 @router.get("/model-performance", response_model=ModelPerformance)
 def model_performance(db: Session = Depends(db_session.get_session)):
     """Real numbers from mlruns/ — see CLAUDE.md's "Real, current results" section.
@@ -47,31 +62,42 @@ def model_performance(db: Session = Depends(db_session.get_session)):
         metrics_path = MLRUNS / f"depot_{depot_id}" / "metrics.json"
         if not metrics_path.exists():
             continue
-        m = json.loads(metrics_path.read_text())
-        per_depot.append(
-            DepotModelMetrics(
-                depot_id=depot_id,
-                depot_name=depot_names[depot_id],
-                best_val_acc=m["best_val_acc"],
-                train_windows=m["train_windows"],
-                val_windows=m["val_windows"],
+        m = _load_json_safe(metrics_path)
+        if m is None:
+            continue
+        try:
+            per_depot.append(
+                DepotModelMetrics(
+                    depot_id=depot_id,
+                    depot_name=depot_names[depot_id],
+                    best_val_acc=m["best_val_acc"],
+                    train_windows=m["train_windows"],
+                    val_windows=m["val_windows"],
+                )
             )
-        )
+        except KeyError as exc:
+            logger.warning("Skipping %s: missing expected key %s", metrics_path, exc)
+            continue
 
     federated = None
     federated_path = MLRUNS / "federated" / "fedprox" / "federated.json"
     if federated_path.exists():
-        f = json.loads(federated_path.read_text())
-        federated = FederatedSummary(
-            strategy=f["strategy"],
-            rounds=f["rounds"],
-            mean_baseline_accuracy=f["mean_baseline_accuracy"],
-            mean_final_accuracy=f["mean_final_accuracy"],
-            gain_vs_baseline=f["gain_vs_baseline"],
-            per_depot_final_accuracy={
-                int(depot_id): row["accuracy"] for depot_id, row in f["final"].items()
-            },
-        )
+        f = _load_json_safe(federated_path)
+        if f is not None:
+            try:
+                federated = FederatedSummary(
+                    strategy=f["strategy"],
+                    rounds=f["rounds"],
+                    mean_baseline_accuracy=f["mean_baseline_accuracy"],
+                    mean_final_accuracy=f["mean_final_accuracy"],
+                    gain_vs_baseline=f["gain_vs_baseline"],
+                    per_depot_final_accuracy={
+                        int(depot_id): row["accuracy"]
+                        for depot_id, row in f.get("final", {}).items()
+                    },
+                )
+            except KeyError as exc:
+                logger.warning("Skipping %s: missing expected key %s", federated_path, exc)
 
     return ModelPerformance(per_depot=per_depot, federated=federated)
 

@@ -71,6 +71,91 @@ def test_model_performance_skips_depots_without_metrics_file(client, tmp_path, m
     assert [d["depot_id"] for d in body["per_depot"]] == [2]
 
 
+def test_model_performance_skips_corrupted_metrics_file_but_returns_others(
+    client, tmp_path, monkeypatch
+):
+    """One truncated/corrupted metrics.json (e.g. from a training run that
+    crashed mid-write) among several valid ones must not 500 the whole
+    endpoint -- the other depots' good data should still come back."""
+    for depot_id, acc in [(1, 0.65), (3, 0.63), (4, 0.66)]:
+        d = tmp_path / f"depot_{depot_id}"
+        d.mkdir()
+        (d / "metrics.json").write_text(
+            json.dumps(
+                {"depot_id": depot_id, "best_val_acc": acc, "train_windows": 100, "val_windows": 30}
+            )
+        )
+    corrupted_dir = tmp_path / "depot_2"
+    corrupted_dir.mkdir()
+    (corrupted_dir / "metrics.json").write_text('{"depot_id": 2, "best_val_acc": 0.7')  # truncated
+    monkeypatch.setattr(stats_module, "MLRUNS", tmp_path)
+
+    resp = client.get("/stats/model-performance")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert sorted(d["depot_id"] for d in body["per_depot"]) == [1, 3, 4]
+
+
+def test_model_performance_skips_metrics_file_missing_required_key(client, tmp_path, monkeypatch):
+    d = tmp_path / "depot_1"
+    d.mkdir()
+    # Missing "val_windows" -- an older/different training-run shape.
+    (d / "metrics.json").write_text(
+        json.dumps({"depot_id": 1, "best_val_acc": 0.65, "train_windows": 100})
+    )
+    monkeypatch.setattr(stats_module, "MLRUNS", tmp_path)
+
+    resp = client.get("/stats/model-performance")
+    assert resp.status_code == 200
+    assert resp.json()["per_depot"] == []
+
+
+def test_model_performance_federated_missing_final_key_defaults_to_empty(
+    client, tmp_path, monkeypatch
+):
+    fed_dir = tmp_path / "federated" / "fedprox"
+    fed_dir.mkdir(parents=True)
+    (fed_dir / "federated.json").write_text(
+        json.dumps(
+            {
+                "strategy": "fedprox",
+                "rounds": 30,
+                "mean_baseline_accuracy": 0.6,
+                "mean_final_accuracy": 0.43,
+                "gain_vs_baseline": -0.17,
+                # no "final" key -- a run that failed before producing it.
+            }
+        )
+    )
+    monkeypatch.setattr(stats_module, "MLRUNS", tmp_path)
+
+    resp = client.get("/stats/model-performance")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["federated"]["strategy"] == "fedprox"
+    assert body["federated"]["per_depot_final_accuracy"] == {}
+
+
+def test_model_performance_corrupted_federated_json_returns_none_not_500(
+    client, tmp_path, monkeypatch
+):
+    d = tmp_path / "depot_1"
+    d.mkdir()
+    (d / "metrics.json").write_text(
+        json.dumps({"depot_id": 1, "best_val_acc": 0.65, "train_windows": 100, "val_windows": 30})
+    )
+    fed_dir = tmp_path / "federated" / "fedprox"
+    fed_dir.mkdir(parents=True)
+    (fed_dir / "federated.json").write_text("not valid json {{{")
+    monkeypatch.setattr(stats_module, "MLRUNS", tmp_path)
+
+    resp = client.get("/stats/model-performance")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["federated"] is None
+    assert len(body["per_depot"]) == 1
+
+
 def test_product_summary_counts(product_client, product_session):
     sync_equipment_status(product_session)  # files 1 AI request for equipment 1 (priority=high)
 
