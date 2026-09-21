@@ -91,6 +91,30 @@ export function PriorityBadge({ priority }: { priority: string }) {
   );
 }
 
+/** Shared error state for a page-critical query: shows the failure and lets
+ * the viewer retry without a full page reload (a transient network blip on a
+ * demo laptop shouldn't require one). */
+export function ErrorRetry({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <p className="text-red-600">{message}</p>
+      <button
+        type="button"
+        onClick={() => onRetry()}
+        className="rounded border border-red-300 bg-white px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 export function StatusBanner() {
   const health = useQuery({ queryKey: ["health"], queryFn: api.health });
   if (health.isLoading) {
@@ -120,7 +144,7 @@ export function DepotTable() {
   const depots = useQuery({ queryKey: ["depots"], queryFn: api.depots });
   if (depots.isLoading) return <p className="text-slate-500">Loading depots…</p>;
   if (depots.isError)
-    return <p className="text-red-600">Failed to load depots.</p>;
+    return <ErrorRetry message="Failed to load depots." onRetry={() => depots.refetch()} />;
   return (
     <table className="w-full text-sm">
       <thead>
@@ -153,7 +177,9 @@ export function FaultDistributionChart() {
   if (dist.isLoading)
     return <p className="text-slate-500">Loading distribution…</p>;
   if (dist.isError)
-    return <p className="text-red-600">Failed to load fault distribution.</p>;
+    return (
+      <ErrorRetry message="Failed to load fault distribution." onRetry={() => dist.refetch()} />
+    );
   if (!dist.data?.length)
     return (
       <p className="text-slate-500">
@@ -196,7 +222,10 @@ export function ProductKpiRow() {
   const summary = useQuery({ queryKey: ["product-summary"], queryFn: api.productSummary });
 
   if (summary.isLoading) return <p className="text-slate-500">Loading product KPIs…</p>;
-  if (summary.isError) return <p className="text-red-600">Failed to load product KPIs.</p>;
+  if (summary.isError)
+    return (
+      <ErrorRetry message="Failed to load product KPIs." onRetry={() => summary.refetch()} />
+    );
 
   const eq = summary.data?.equipment_by_status ?? {};
   const openByPriority = summary.data?.open_requests_by_priority ?? {};
@@ -230,7 +259,10 @@ export function ModelAccuracyChart() {
   const perf = useQuery({ queryKey: ["model-performance"], queryFn: api.modelPerformance });
 
   if (perf.isLoading) return <p className="text-slate-500">Loading model performance…</p>;
-  if (perf.isError) return <p className="text-red-600">Failed to load model performance.</p>;
+  if (perf.isError)
+    return (
+      <ErrorRetry message="Failed to load model performance." onRetry={() => perf.refetch()} />
+    );
   if (!perf.data?.per_depot.length)
     return (
       <p className="text-slate-500">
@@ -287,7 +319,12 @@ export function SignalWaveform({ windowId }: { windowId: number }) {
   if (windowDetail.isLoading)
     return <p className="text-slate-500">Loading signal…</p>;
   if (windowDetail.isError)
-    return <p className="text-red-600">Failed to load signal window.</p>;
+    return (
+      <ErrorRetry
+        message="Failed to load signal window."
+        onRetry={() => windowDetail.refetch()}
+      />
+    );
 
   const chartData =
     windowDetail.data?.raw_values.map((v, i) => ({

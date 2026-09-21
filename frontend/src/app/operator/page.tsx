@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "@/lib/api";
-import { Nav, PriorityBadge, StatusBadge } from "../components";
+import { ErrorRetry, Nav, PriorityBadge, StatusBadge } from "../components";
 import type { WorkOrderStatus } from "@/lib/types";
 
 const NEXT_STATUS: Partial<Record<WorkOrderStatus, WorkOrderStatus>> = {
@@ -20,7 +20,8 @@ function EquipmentBoard({ depotId }: { depotId: number | null }) {
   });
 
   if (equipment.isLoading) return <p className="text-slate-500">Loading equipment…</p>;
-  if (equipment.isError) return <p className="text-red-600">Failed to load equipment.</p>;
+  if (equipment.isError)
+    return <ErrorRetry message="Failed to load equipment." onRetry={() => equipment.refetch()} />;
   if (!equipment.data?.length)
     return <p className="text-slate-500">No equipment found.</p>;
 
@@ -60,7 +61,13 @@ function AiFlaggedPanel() {
   const equipment = useQuery({ queryKey: ["equipment", "all"], queryFn: () => api.equipment() });
 
   if (requests.isLoading) return <p className="text-slate-500">Loading AI-flagged requests…</p>;
-  if (requests.isError) return <p className="text-red-600">Failed to load AI-flagged requests.</p>;
+  if (requests.isError)
+    return (
+      <ErrorRetry
+        message="Failed to load AI-flagged requests."
+        onRetry={() => requests.refetch()}
+      />
+    );
   if (!requests.data?.length)
     return (
       <p className="text-slate-500">
@@ -132,70 +139,92 @@ function DispatchQueue() {
   );
 
   if (requests.isLoading) return <p className="text-slate-500">Loading requests…</p>;
-  if (requests.isError) return <p className="text-red-600">Failed to load requests.</p>;
+  if (requests.isError)
+    return <ErrorRetry message="Failed to load requests." onRetry={() => requests.refetch()} />;
   if (!pending?.length)
     return <p className="text-slate-500">Nothing awaiting dispatch.</p>;
 
+  const noTechnicians = technicians.isSuccess && technicians.data.length === 0;
+
   return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className="border-b text-left text-slate-500">
-          <th className="py-2">Request</th>
-          <th className="py-2">Priority</th>
-          <th className="py-2">Status</th>
-          <th className="py-2">Technician</th>
-          <th className="py-2"></th>
-        </tr>
-      </thead>
-      <tbody>
-        {pending.map((r) => (
-          <tr key={r.id} className="border-b last:border-0">
-            <td className="py-2 font-medium">{r.title}</td>
-            <td className="py-2">
-              <PriorityBadge priority={r.priority} />
-            </td>
-            <td className="py-2">
-              <StatusBadge status={r.status} />
-            </td>
-            <td className="py-2">
-              <select
-                className="rounded border bg-white px-2 py-1"
-                value={selectedTechnician[r.id] ?? ""}
-                onChange={(e) =>
-                  setSelectedTechnician((prev) => ({
-                    ...prev,
-                    [r.id]: Number(e.target.value),
-                  }))
-                }
-              >
-                <option value="" disabled>
-                  Select technician…
-                </option>
-                {technicians.data?.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name} ({t.status})
-                  </option>
-                ))}
-              </select>
-            </td>
-            <td className="py-2">
-              <button
-                disabled={!selectedTechnician[r.id] || dispatch.isPending}
-                onClick={() =>
-                  dispatch.mutate({
-                    serviceRequestId: r.id,
-                    technicianId: selectedTechnician[r.id],
-                  })
-                }
-                className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
-              >
-                Dispatch
-              </button>
-            </td>
+    <div className="space-y-3">
+      {technicians.isError && (
+        <ErrorRetry
+          message="Failed to load technicians -- dispatch is unavailable until this loads."
+          onRetry={() => technicians.refetch()}
+        />
+      )}
+      {noTechnicians && (
+        <p className="text-sm text-amber-700">
+          No technicians available. Dispatch is disabled until a technician is added.
+        </p>
+      )}
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b text-left text-slate-500">
+            <th className="py-2">Request</th>
+            <th className="py-2">Priority</th>
+            <th className="py-2">Status</th>
+            <th className="py-2">Technician</th>
+            <th className="py-2"></th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {pending.map((r) => (
+            <tr key={r.id} className="border-b last:border-0">
+              <td className="py-2 font-medium">{r.title}</td>
+              <td className="py-2">
+                <PriorityBadge priority={r.priority} />
+              </td>
+              <td className="py-2">
+                <StatusBadge status={r.status} />
+              </td>
+              <td className="py-2">
+                <select
+                  className="rounded border bg-white px-2 py-1 disabled:opacity-50"
+                  disabled={noTechnicians}
+                  value={selectedTechnician[r.id] ?? ""}
+                  onChange={(e) =>
+                    setSelectedTechnician((prev) => ({
+                      ...prev,
+                      [r.id]: Number(e.target.value),
+                    }))
+                  }
+                >
+                  <option value="" disabled>
+                    {noTechnicians ? "No technicians available" : "Select technician…"}
+                  </option>
+                  {technicians.data?.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} ({t.status})
+                    </option>
+                  ))}
+                </select>
+              </td>
+              <td className="py-2">
+                <button
+                  disabled={!selectedTechnician[r.id] || dispatch.isPending || noTechnicians}
+                  onClick={() =>
+                    dispatch.mutate({
+                      serviceRequestId: r.id,
+                      technicianId: selectedTechnician[r.id],
+                    })
+                  }
+                  className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
+                >
+                  Dispatch
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {dispatch.isError && (
+        <p className="text-sm text-red-600">
+          {dispatch.error instanceof Error ? dispatch.error.message : "Failed to dispatch."}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -218,7 +247,10 @@ function WorkOrderQueue() {
   });
 
   if (workOrders.isLoading) return <p className="text-slate-500">Loading work orders…</p>;
-  if (workOrders.isError) return <p className="text-red-600">Failed to load work orders.</p>;
+  if (workOrders.isError)
+    return (
+      <ErrorRetry message="Failed to load work orders." onRetry={() => workOrders.refetch()} />
+    );
   if (!workOrders.data?.length)
     return <p className="text-slate-500">No work orders yet.</p>;
 

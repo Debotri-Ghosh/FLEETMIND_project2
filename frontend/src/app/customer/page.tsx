@@ -2,8 +2,8 @@
 
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { api } from "@/lib/api";
-import { Nav, PriorityBadge, StatusBadge } from "../components";
+import { ApiError, api } from "@/lib/api";
+import { ErrorRetry, Nav, PriorityBadge, StatusBadge } from "../components";
 import type { ServiceRequestPriority } from "@/lib/types";
 
 function EquipmentBrowser({
@@ -47,7 +47,7 @@ function EquipmentBrowser({
 
       {equipment.isLoading && <p className="text-slate-500">Loading equipment…</p>}
       {equipment.isError && (
-        <p className="text-red-600">Failed to load equipment.</p>
+        <ErrorRetry message="Failed to load equipment." onRetry={() => equipment.refetch()} />
       )}
       {equipment.data?.length === 0 && (
         <p className="text-slate-500">No equipment found for this customer/depot.</p>
@@ -102,6 +102,15 @@ function ServiceRequestForm({ customerId }: { customerId: number }) {
       setDescription("");
       setPriority("medium");
       setEquipmentId("");
+    },
+    onError: (error) => {
+      // A 404 here almost always means the selected equipment was retired (or
+      // otherwise changed) between page load and submit -- refresh the
+      // equipment list so the dropdown reflects reality instead of quietly
+      // failing again on retry.
+      if (error instanceof ApiError && error.status === 404) {
+        queryClient.invalidateQueries({ queryKey: ["equipment", "customer", customerId, null] });
+      }
     },
   });
 
@@ -184,7 +193,13 @@ function ServiceRequestForm({ customerId }: { customerId: number }) {
         {createRequest.isPending ? "Submitting…" : "File service request"}
       </button>
       {createRequest.isError && (
-        <p className="text-sm text-red-600">Failed to submit request. Try again.</p>
+        <p className="text-sm text-red-600">
+          {createRequest.error instanceof ApiError && createRequest.error.status === 404
+            ? `This equipment is no longer available (${createRequest.error.message}). The equipment list has been refreshed -- please re-select and try again.`
+            : createRequest.error instanceof Error
+              ? `Failed to submit request: ${createRequest.error.message}`
+              : "Failed to submit request. Try again."}
+        </p>
       )}
     </form>
   );
@@ -197,7 +212,10 @@ function ServiceRequestTracker({ customerId }: { customerId: number }) {
   });
 
   if (requests.isLoading) return <p className="text-slate-500">Loading requests…</p>;
-  if (requests.isError) return <p className="text-red-600">Failed to load requests.</p>;
+  if (requests.isError)
+    return (
+      <ErrorRetry message="Failed to load requests." onRetry={() => requests.refetch()} />
+    );
   if (!requests.data?.length)
     return <p className="text-slate-500">No service requests filed yet.</p>;
 
@@ -249,20 +267,30 @@ export default function CustomerPage() {
           </p>
         </header>
 
-        <label className="block text-sm">
-          <span className="mr-2 font-medium">Viewing as</span>
-          <select
-            className="rounded border bg-white px-2 py-1"
-            value={activeCustomerId ?? ""}
-            onChange={(e) => setCustomerId(Number(e.target.value))}
-          >
-            {customers.data?.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} {c.company ? `— ${c.company}` : ""}
-              </option>
-            ))}
-          </select>
-        </label>
+        {customers.isLoading && <p className="text-slate-500">Loading customers…</p>}
+        {customers.isError && (
+          <ErrorRetry message="Failed to load customers." onRetry={() => customers.refetch()} />
+        )}
+        {customers.isSuccess && customers.data.length === 0 && (
+          <p className="text-slate-500">No customers seeded yet.</p>
+        )}
+
+        {customers.isSuccess && customers.data.length > 0 && (
+          <label className="block text-sm">
+            <span className="mr-2 font-medium">Viewing as</span>
+            <select
+              className="rounded border bg-white px-2 py-1"
+              value={activeCustomerId ?? ""}
+              onChange={(e) => setCustomerId(Number(e.target.value))}
+            >
+              {customers.data.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} {c.company ? `— ${c.company}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
 
         {activeCustomerId !== null && (
           <>

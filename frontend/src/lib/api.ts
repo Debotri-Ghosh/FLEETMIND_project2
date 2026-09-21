@@ -4,9 +4,31 @@ export const API_BASE =
 async function getJson<T>(path: string): Promise<T> {
   const resp = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
   if (!resp.ok) {
-    throw new Error(`API ${path} failed: ${resp.status}`);
+    const detail = await extractDetail(resp);
+    throw new ApiError(detail ?? `API ${path} failed: ${resp.status}`, resp.status);
   }
   return resp.json() as Promise<T>;
+}
+
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+/** FastAPI's HTTPException body is `{"detail": "..."}`; surface that message
+ * when present so callers (e.g. a failed form submit) can show the real
+ * reason -- "equipment 7 not found" -- instead of a bare status code. */
+async function extractDetail(resp: Response): Promise<string | undefined> {
+  try {
+    const data = await resp.clone().json();
+    return typeof data?.detail === "string" ? data.detail : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function sendJson<T>(
@@ -20,7 +42,8 @@ async function sendJson<T>(
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
-    throw new Error(`API ${method} ${path} failed: ${resp.status}`);
+    const detail = await extractDetail(resp);
+    throw new ApiError(detail ?? `API ${method} ${path} failed: ${resp.status}`, resp.status);
   }
   return resp.json() as Promise<T>;
 }
