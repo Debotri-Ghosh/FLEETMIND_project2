@@ -97,6 +97,45 @@ class ProductSummary(BaseModel):
     active_work_orders: int = Field(description="Work orders not in ('completed', 'cancelled').")
 
 
+class ReplayStatusResponse(BaseModel):
+    """Progress of the simulated sensor feed over the static CWRU archive."""
+
+    total_windows: int
+    released: int = Field(description="Windows that have 'arrived' so far.")
+    processed: int
+    pending: int = Field(description="Arrived but not yet predicted.")
+    percent_released: float
+    complete: bool
+    worker: dict = Field(description="Background worker state: running, interval, last tick.")
+
+
+class ReplayStartRequest(BaseModel):
+    interval_seconds: float | None = Field(
+        default=None, ge=0.25, le=60.0, description="Seconds between ticks."
+    )
+    batch_size: int | None = Field(
+        default=None, ge=1, le=500, description="Windows released per tick."
+    )
+
+
+class ReplayTickResponse(BaseModel):
+    released: int
+    predictions_written: int
+    decisions_written: int
+    equipment_status_changes: int
+    service_requests_filed: int
+    error: str | None = None
+
+
+class ReplayResetResponse(BaseModel):
+    windows_unreleased: int
+    predictions_deleted: int
+    decisions_deleted: int
+    ai_service_requests_deleted: int
+    work_orders_deleted: int
+    equipment_reset_to_active: int
+
+
 class Customer(BaseModel):
     id: int
     name: str

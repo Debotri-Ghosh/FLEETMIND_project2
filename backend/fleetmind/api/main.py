@@ -10,6 +10,7 @@ from fleetmind.api.routers import (
     depots,
     equipment,
     experiments,
+    replay,
     service_requests,
     stats,
     technicians,
@@ -19,6 +20,7 @@ from fleetmind.api.routers import (
 from fleetmind.core.config import get_settings
 from fleetmind.db import session as db_session
 from fleetmind.db.models import seed_depots_payload
+from fleetmind.replay.worker import worker as replay_worker
 
 
 def create_app() -> FastAPI:
@@ -45,6 +47,13 @@ def create_app() -> FastAPI:
     app.include_router(work_orders.router)
     app.include_router(customers.router)
     app.include_router(technicians.router)
+    app.include_router(replay.router)
+
+    @app.on_event("shutdown")
+    async def _stop_replay_worker() -> None:
+        # Otherwise the background tick task outlives the app on reload and
+        # two workers end up racing over the same windows.
+        await replay_worker.stop()
 
     @app.get("/health", tags=["system"])
     def health(db: Session = Depends(db_session.get_session)):
