@@ -1,8 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -111,6 +112,161 @@ export function ErrorRetry({
       >
         Retry
       </button>
+    </div>
+  );
+}
+
+/** Replay controls: drive the simulated sensor feed.
+ *
+ * The underlying data is an archived CWRU dataset being replayed, NOT live
+ * telemetry, and the panel says so on screen — same standard the simulated
+ * GPS fields are held to elsewhere in this UI. */
+export function ReplayControls() {
+  const queryClient = useQueryClient();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  const status = useQuery({
+    queryKey: ["replay-status"],
+    queryFn: api.replayStatus,
+    // Poll while the worker is ticking so progress moves on screen by itself.
+    refetchInterval: (query) =>
+      query.state.data?.worker.running ? 1000 : false,
+  });
+
+  // Everything the replay touches is stale the moment a tick lands.
+  const refreshAll = () => {
+    for (const key of [
+      "equipment",
+      "service-requests",
+      "work-orders",
+      "product-summary",
+      "replay-status",
+    ]) {
+      queryClient.invalidateQueries({ queryKey: [key] });
+    }
+  };
+
+  // While the worker runs autonomously, nothing else on the page knows a tick
+  // landed — so refresh the data views each time the tick counter advances.
+  const ticks = status.data?.worker.ticks ?? 0;
+  useEffect(() => {
+    if (ticks > 0) refreshAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ticks]);
+
+  const run = async (label: string, fn: () => Promise<unknown>) => {
+    setBusy(label);
+    setNote(null);
+    try {
+      const result = (await fn()) as { error?: string | null } | undefined;
+      if (result && typeof result === "object" && "error" in result && result.error) {
+        setNote(`Tick failed: ${result.error}`);
+      }
+      refreshAll();
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : "Replay command failed.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (status.isLoading)
+    return <p className="text-slate-500">Loading replay status…</p>;
+  if (status.isError)
+    return (
+      <ErrorRetry
+        message="Failed to load replay status."
+        onRetry={() => status.refetch()}
+      />
+    );
+
+  const data = status.data;
+  const running = data?.worker.running ?? false;
+  const percent = data?.percent_released ?? 0;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-500">
+        Replays the archived CWRU recordings as if sensors were streaming them in, so the
+        pipeline runs incrementally on arrival. This is a replay of recorded data — it is not
+        live telemetry, and no sensors are attached.
+      </p>
+
+      <div>
+        <div className="mb-1 flex items-baseline justify-between text-sm">
+          <span className="font-medium">
+            {data?.released ?? 0} / {data?.total_windows ?? 0} windows arrived
+          </span>
+          <span className="text-slate-500">
+            {percent}%{data?.pending ? ` · ${data.pending} awaiting processing` : ""}
+          </span>
+        </div>
+        <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
+          <div
+            className={`h-full rounded-full transition-all duration-500 ${
+              running ? "bg-blue-600" : "bg-slate-400"
+            }`}
+            style={{ width: `${Math.min(percent, 100)}%` }}
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={busy !== null || running || data?.complete}
+          onClick={() => run("start", () => api.replayStart({ interval_seconds: 2, batch_size: 25 }))}
+          className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+        >
+          {busy === "start" ? "Starting…" : "Start live replay"}
+        </button>
+        <button
+          type="button"
+          disabled={busy !== null || !running}
+          onClick={() => run("stop", api.replayStop)}
+          className="rounded bg-slate-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+        >
+          {busy === "stop" ? "Stopping…" : "Pause"}
+        </button>
+        <button
+          type="button"
+          disabled={busy !== null || running || data?.complete}
+          onClick={() => run("step", api.replayStep)}
+          className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 disabled:opacity-50"
+        >
+          {busy === "step" ? "Processing…" : "Step one batch"}
+        </button>
+        <button
+          type="button"
+          disabled={busy !== null}
+          onClick={() => run("reset", api.replayReset)}
+          className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 disabled:opacity-50"
+        >
+          {busy === "reset" ? "Resetting…" : "Reset"}
+        </button>
+        {running && (
+          <span className="text-xs font-medium text-blue-700">
+            ● live — tick {data?.worker.ticks ?? 0}
+          </span>
+        )}
+        {data?.complete && !running && (
+          <span className="text-xs font-medium text-green-700">archive fully replayed</span>
+        )}
+      </div>
+
+      {data?.worker.last_tick && (
+        <p className="text-xs text-slate-500">
+          Last tick: {data.worker.last_tick.released} arrived ·{" "}
+          {data.worker.last_tick.predictions_written} predicted ·{" "}
+          {data.worker.last_tick.decisions_written} decisions ·{" "}
+          {data.worker.last_tick.equipment_status_changes} equipment status changes ·{" "}
+          {data.worker.last_tick.service_requests_filed} requests filed
+        </p>
+      )}
+      {(note || data?.worker.last_error) && (
+        <p className="text-xs text-red-600">{note ?? data?.worker.last_error}</p>
+      )}
     </div>
   );
 }

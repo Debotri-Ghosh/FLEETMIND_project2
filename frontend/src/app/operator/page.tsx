@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "@/lib/api";
-import { ErrorRetry, Nav, PriorityBadge, StatusBadge } from "../components";
+import { ErrorRetry, Nav, PriorityBadge, ReplayControls, StatusBadge } from "../components";
 import type { WorkOrderStatus } from "@/lib/types";
 
 const NEXT_STATUS: Partial<Record<WorkOrderStatus, WorkOrderStatus>> = {
@@ -320,6 +320,11 @@ export default function OperatorPage() {
             (fleetmind.agents.sync_equipment_status) — it is not editable here.
           </p>
         </header>
+
+        <section className="rounded-xl bg-white p-6 shadow">
+          <h2 className="mb-4 text-xl font-semibold">Simulated Sensor Feed</h2>
+          <ReplayControls />
+        </section>
 
         <section className="rounded-xl bg-white p-6 shadow">
           <div className="mb-4 flex items-center justify-between">

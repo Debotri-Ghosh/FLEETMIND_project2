@@ -170,9 +170,14 @@ class ReplayWorker:
         if task is not None:
             task.cancel()
             # We are shutting the loop down on purpose; whatever it raises on
-            # the way out (cancellation, or a tick that was mid-failure) is
-            # not actionable here.
-            with contextlib.suppress(Exception):
+            # the way out is not actionable here.
+            #
+            # CancelledError MUST be named explicitly: it inherits from
+            # BaseException, not Exception, so suppress(Exception) alone lets
+            # it escape -- straight out of the /replay/stop handler, as a 500
+            # whose error response carries no CORS headers, which the browser
+            # then reports as an unrelated-looking CORS failure.
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         return True
 

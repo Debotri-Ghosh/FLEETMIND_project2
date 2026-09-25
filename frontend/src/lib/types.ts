@@ -148,6 +148,44 @@ export interface ModelPerformance {
   federated: FederatedSummary | null;
 }
 
+export interface ReplayTick {
+  at: string;
+  released: number;
+  predictions_written: number;
+  decisions_written: number;
+  equipment_status_changes: number;
+  service_requests_filed: number;
+  error: string | null;
+}
+
+export interface ReplayWorkerState {
+  running: boolean;
+  interval_seconds: number;
+  batch_size: number;
+  ticks: number;
+  last_tick: ReplayTick | null;
+  last_error: string | null;
+}
+
+export interface ReplayStatus {
+  total_windows: number;
+  released: number;
+  processed: number;
+  pending: number;
+  percent_released: number;
+  complete: boolean;
+  worker: ReplayWorkerState;
+}
+
+export interface ReplayStepResult {
+  released: number;
+  predictions_written: number;
+  decisions_written: number;
+  equipment_status_changes: number;
+  service_requests_filed: number;
+  error: string | null;
+}
+
 export interface ProductSummary {
   equipment_by_status: Record<string, number>;
   open_requests_by_priority: Record<string, number>;

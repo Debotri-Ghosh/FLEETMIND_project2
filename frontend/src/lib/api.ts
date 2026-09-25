@@ -79,6 +79,15 @@ export const api = {
     getJson<import("./types").ModelPerformance>("/stats/model-performance"),
   productSummary: () =>
     getJson<import("./types").ProductSummary>("/stats/product-summary"),
+  replayStatus: () => getJson<import("./types").ReplayStatus>("/replay/status"),
+  replayStart: (params?: { interval_seconds?: number; batch_size?: number }) =>
+    sendJson<import("./types").ReplayStatus>("POST", "/replay/start", params ?? {}),
+  replayStop: () =>
+    sendJson<import("./types").ReplayStatus>("POST", "/replay/stop", {}),
+  replayStep: () =>
+    sendJson<import("./types").ReplayStepResult>("POST", "/replay/step", {}),
+  replayReset: () =>
+    sendJson<Record<string, number>>("POST", "/replay/reset", {}),
   customers: () => getJson<import("./types").Customer[]>("/customers"),
   technicians: (params?: { status?: string }) =>
     getJson<import("./types").Technician[]>(
