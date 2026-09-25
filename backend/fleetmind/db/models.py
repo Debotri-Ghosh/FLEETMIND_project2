@@ -78,6 +78,13 @@ class SignalWindow(Base):
     end_sample: Mapped[int] = mapped_column(Integer, nullable=False)
     raw_values: Mapped[list[float]] = mapped_column(RawValuesType, nullable=False)
     label: Mapped[str] = mapped_column(Text, nullable=False)
+    # Replay-arrival marker. CWRU is a static archive, so "new sensor data" is
+    # simulated by progressively releasing already-ingested windows: NULL means
+    # this window has not "arrived" yet and the live pipeline must ignore it;
+    # a timestamp means it has. See fleetmind/replay/engine.py. The offline
+    # batch workflow (ml/predict.py without --incremental) deliberately ignores
+    # this column and reprocesses everything, which is why it stays nullable.
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ModelPrediction(Base):

@@ -22,41 +22,59 @@ from fleetmind.ml.model import LABEL_MAP, BearingCNN, to_fft_magnitude
 MLRUNS = Path("mlruns")
 
 
-def predict_depot(depot_id: int, session, model_path: Path) -> int:
+def predict_depot(depot_id: int, session, model_path: Path, incremental: bool = False) -> int:
+    """Run this depot's trained CNN over its windows and write ModelPrediction rows.
+
+    Two modes, deliberately different:
+
+    * ``incremental=False`` (default, the documented offline batch workflow):
+      wipe every existing prediction/decision for this depot and reprocess all
+      of its windows, ignoring ``released_at`` entirely. Reproducible full runs.
+    * ``incremental=True`` (used by the replay pipeline): process only windows
+      that have *arrived* (``released_at IS NOT NULL``) and do not already have
+      a prediction. Destroys nothing, so it is safe to call repeatedly on a
+      tick -- that is what makes a live, incremental workflow possible.
+    """
     model = BearingCNN(num_classes=len(LABEL_MAP))
     state = torch.load(model_path, map_location="cpu")
     model.load_state_dict(state)
     model.eval()
 
-    depot_window_ids = (
-        session.execute(
-            select(SignalWindow.id)
-            .join(Experiment, Experiment.id == SignalWindow.experiment_id)
-            .where(Experiment.depot_id == depot_id)
+    if not incremental:
+        depot_window_ids = (
+            session.execute(
+                select(SignalWindow.id)
+                .join(Experiment, Experiment.id == SignalWindow.experiment_id)
+                .where(Experiment.depot_id == depot_id)
+            )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
-    )
-    if depot_window_ids:
-        session.execute(
-            delete(AgentDecision).where(
-                AgentDecision.prediction_id.in_(
-                    select(ModelPrediction.id).where(
-                        ModelPrediction.window_id.in_(depot_window_ids)
+        if depot_window_ids:
+            session.execute(
+                delete(AgentDecision).where(
+                    AgentDecision.prediction_id.in_(
+                        select(ModelPrediction.id).where(
+                            ModelPrediction.window_id.in_(depot_window_ids)
+                        )
                     )
                 )
             )
-        )
-        session.execute(
-            delete(ModelPrediction).where(ModelPrediction.window_id.in_(depot_window_ids))
-        )
+            session.execute(
+                delete(ModelPrediction).where(ModelPrediction.window_id.in_(depot_window_ids))
+            )
 
-    windows = session.execute(
+    query = (
         select(SignalWindow.id, SignalWindow.raw_values, SignalWindow.label)
         .join(Experiment, Experiment.id == SignalWindow.experiment_id)
         .where(Experiment.depot_id == depot_id)
         .order_by(SignalWindow.id)
-    ).all()
+    )
+    if incremental:
+        query = query.outerjoin(
+            ModelPrediction, ModelPrediction.window_id == SignalWindow.id
+        ).where(SignalWindow.released_at.is_not(None), ModelPrediction.id.is_(None))
+    windows = session.execute(query).all()
 
     count = 0
     for window_id, raw_values, _true_label in windows:
