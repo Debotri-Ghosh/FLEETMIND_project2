@@ -11,7 +11,7 @@ def test_list_depots(client):
     assert resp.status_code == 200
     depots = resp.json()
     assert len(depots) == 4
-    assert depots[0]["name"] == "depot_0hp"
+    assert depots[0]["name"] == "Plant A (CWRU 0 HP)"
     assert depots[0]["n_experiments"] == 1
 
 

@@ -21,7 +21,7 @@ import { api } from "@/lib/api";
 const NAV_LINKS = [
   { href: "/", label: "Dashboard" },
   { href: "/customer", label: "Customer" },
-  { href: "/operator", label: "Depot Operator" },
+  { href: "/operator", label: "Site Operations" },
 ] as const;
 
 export function Nav() {
@@ -298,14 +298,14 @@ export function StatusBanner() {
 
 export function DepotTable() {
   const depots = useQuery({ queryKey: ["depots"], queryFn: api.depots });
-  if (depots.isLoading) return <p className="text-slate-500">Loading depots…</p>;
+  if (depots.isLoading) return <p className="text-slate-500">Loading sites…</p>;
   if (depots.isError)
-    return <ErrorRetry message="Failed to load depots." onRetry={() => depots.refetch()} />;
+    return <ErrorRetry message="Failed to load sites." onRetry={() => depots.refetch()} />;
   return (
     <table className="w-full text-sm">
       <thead>
         <tr className="border-b text-left text-slate-500">
-          <th className="py-2">Depot</th>
+          <th className="py-2">Site</th>
           <th className="py-2">Motor Load (HP)</th>
           <th className="py-2">Nominal RPM</th>
           <th className="py-2">Experiments</th>
@@ -460,7 +460,7 @@ export function ModelAccuracyChart() {
           {federated.strategy.toUpperCase()} over {federated.rounds} rounds: mean local baseline{" "}
           {(federated.mean_baseline_accuracy * 100).toFixed(1)}% vs. mean federated{" "}
           {(federated.mean_final_accuracy * 100).toFixed(1)}% — a real, documented gap from
-          federated averaging under per-depot class imbalance, not a bug.
+          federated averaging under per-site class imbalance, not a bug.
         </p>
       )}
     </div>

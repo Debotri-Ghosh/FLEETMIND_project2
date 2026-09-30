@@ -28,7 +28,7 @@ function EquipmentBrowser({
   return (
     <div className="space-y-4">
       <label className="text-sm">
-        <span className="mr-2 font-medium">Depot</span>
+        <span className="mr-2 font-medium">Site</span>
         <select
           className="rounded border bg-white px-2 py-1"
           value={depotId ?? ""}
@@ -36,7 +36,7 @@ function EquipmentBrowser({
             onDepotChange(e.target.value === "" ? null : Number(e.target.value))
           }
         >
-          <option value="">All depots</option>
+          <option value="">All sites</option>
           {depots.data?.map((d) => (
             <option key={d.id} value={d.id}>
               {d.name} ({d.load_hp}HP)
@@ -50,7 +50,7 @@ function EquipmentBrowser({
         <ErrorRetry message="Failed to load equipment." onRetry={() => equipment.refetch()} />
       )}
       {equipment.data?.length === 0 && (
-        <p className="text-slate-500">No equipment found for this customer/depot.</p>
+        <p className="text-slate-500">No equipment found for this customer/site.</p>
       )}
       {equipment.data && equipment.data.length > 0 && (
         <table className="w-full text-sm">
@@ -58,7 +58,7 @@ function EquipmentBrowser({
             <tr className="border-b text-left text-slate-500">
               <th className="py-2">Equipment</th>
               <th className="py-2">Type</th>
-              <th className="py-2">Depot</th>
+              <th className="py-2">Site</th>
               <th className="py-2">Status</th>
             </tr>
           </thead>

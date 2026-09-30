@@ -79,7 +79,7 @@ def diagnostic_agent(state: AgentState) -> AgentState:
 
 # ── Risk ───────────────────────────────────────────────────────────────
 def risk_agent(state: AgentState) -> AgentState:
-    """Compute a 0-1 risk score from fault severity + depot load."""
+    """Compute a 0-1 risk score from fault severity + site load factor."""
     label = state.get("predicted_label", "Normal")
     depot_id = state.get("depot_id", 1)
     confidence = state.get("diagnosis_confidence", 0.5)
@@ -95,7 +95,13 @@ def risk_agent(state: AgentState) -> AgentState:
     if label != "Normal":
         factors.append(f"Fault type: {label} (severity {severity:.2f})")
     if depot_id >= 2:
-        factors.append(f"High load: {depot_id}HP depot (factor {load_factor:.2f})")
+        # Deliberately does NOT name a horsepower figure: LOAD_RISK_FACTOR is
+        # keyed by site id, not by load_hp, so the old wording ("{depot_id}HP
+        # depot") printed the site id as if it were the motor load and was
+        # simply wrong (site id 2 is the 1 HP site). Only the text is fixed
+        # here -- the scoring itself is left exactly as-is on purpose; see
+        # CLAUDE.md for the open question about that keying.
+        factors.append(f"Higher-load site (load factor {load_factor:.2f})")
     if confidence < 0.6:
         factors.append("Low diagnosis confidence")
     if not factors:

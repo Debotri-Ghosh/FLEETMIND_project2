@@ -115,7 +115,11 @@ class AgentDecision(Base):
 
 
 class Customer(Base):
-    """Fleet manager / customer who owns equipment at depots."""
+    """A customer company whose plant equipment we monitor and service.
+
+    (The `depot` table/column naming throughout is legacy for "manufacturing
+    site" -- kept deliberately because renaming the schema is high-risk for
+    low benefit. User-facing copy says "site".)"""
 
     __tablename__ = "customers"
 
@@ -129,7 +133,8 @@ class Customer(Base):
 
 
 class Equipment(Base):
-    """A physical asset (motor / bearing) at a depot owned by a customer."""
+    """A rotating-machinery asset (motor, pump, fan, compressor) installed at a
+    customer's manufacturing site."""
 
     __tablename__ = "equipment"
     __table_args__ = (
@@ -260,16 +265,20 @@ class WorkOrder(Base):
 
 def seed_customers_payload() -> list[dict[str, Any]]:
     return [
-        {"name": "Acme Logistics", "email": "ops@acme.com", "company": "Acme Logistics Ltd"},
         {
-            "name": "Global Freight",
-            "email": "ops@globalfreight.com",
-            "company": "Global Freight Inc",
+            "name": "Acme Manufacturing",
+            "email": "maintenance@acmemfg.com",
+            "company": "Acme Manufacturing Ltd",
         },
         {
-            "name": "Rapid Transport",
-            "email": "ops@rapidtransport.com",
-            "company": "Rapid Transport Co",
+            "name": "Northwind Steel",
+            "email": "plant.ops@northwindsteel.com",
+            "company": "Northwind Steel Works",
+        },
+        {
+            "name": "Pinnacle Processing",
+            "email": "reliability@pinnacleprocessing.com",
+            "company": "Pinnacle Processing Pvt Ltd",
         },
     ]
 
@@ -301,8 +310,11 @@ def seed_technicians_payload() -> list[dict[str, Any]]:
 
 def seed_depots_payload() -> list[dict[str, Any]]:
     return [
-        {"name": "depot_0hp", "load_hp": 0, "nominal_rpm": 1797},
-        {"name": "depot_1hp", "load_hp": 1, "nominal_rpm": 1772},
-        {"name": "depot_2hp", "load_hp": 2, "nominal_rpm": 1750},
-        {"name": "depot_3hp", "load_hp": 3, "nominal_rpm": 1730},
+        # Display names keep the CWRU motor load explicit: each "site" IS one
+        # real CWRU load level, and every number traced back to a site must
+        # stay traceable to the dataset it came from.
+        {"name": "Plant A (CWRU 0 HP)", "load_hp": 0, "nominal_rpm": 1797},
+        {"name": "Plant B (CWRU 1 HP)", "load_hp": 1, "nominal_rpm": 1772},
+        {"name": "Plant C (CWRU 2 HP)", "load_hp": 2, "nominal_rpm": 1750},
+        {"name": "Plant D (CWRU 3 HP)", "load_hp": 3, "nominal_rpm": 1730},
     ]

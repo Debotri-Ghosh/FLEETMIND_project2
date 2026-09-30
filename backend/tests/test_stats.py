@@ -37,7 +37,7 @@ def test_model_performance_reads_mlruns(client, tmp_path, monkeypatch):
     assert body["per_depot"] == [
         {
             "depot_id": 1,
-            "depot_name": "depot_0hp",
+            "depot_name": "Plant A (CWRU 0 HP)",
             "best_val_acc": 0.65,
             "train_windows": 100,
             "val_windows": 30,

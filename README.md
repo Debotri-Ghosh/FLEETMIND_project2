@@ -6,16 +6,16 @@ LTIMindTree.
 
 FleetMind learns bearing fault patterns across multiple non-IID operating
 environments (the 4 real CWRU motor load levels — 0/1/2/3 HP — act as 4
-simulated depots), converts model predictions into maintenance decisions via a
+simulated manufacturing sites), converts model predictions into maintenance decisions via a
 LangGraph multi-agent chain, and bridges those decisions into a small
 product layer (equipment, service requests, work orders) with customer and
-depot-operator dashboards. No synthetic data anywhere except the documented
+site-operations dashboards. No synthetic data anywhere except the documented
 TimeGAN/WaveGAN-lite augmentation step.
 
 ## Architecture
 
 ```
-CWRU dataset ──▶ Ingestion ──▶ EDA ──▶ Per-depot 1D-CNN (FFT-magnitude input)
+CWRU dataset ──▶ Ingestion ──▶ EDA ──▶ Per-site 1D-CNN (FFT-magnitude input)
                                           │
                         WaveGAN-lite rare-fault augmentation
                                           │
@@ -104,15 +104,15 @@ Run from `backend/`, after ingestion (`python -m fleetmind.ingestion.download`,
 the CWRU mirror):
 
 ```bash
-# Per-depot classifier (honest experiment-level split, FFT-magnitude input)
+# Per-site classifier (honest experiment-level split, FFT-magnitude input)
 python -m fleetmind.ml.train --depot-id 1 --epochs 20
 python -m fleetmind.ml.evaluate --depot-id 1
 
-# Rare-class augmentation (WaveGAN-lite) + comparison report, per depot
+# Rare-class augmentation (WaveGAN-lite) + comparison report, per site
 python -m fleetmind.augmentation.run --depot-id 1
 
-# Federated learning across all 4 depots — FedProx is the primary result;
-# plain FedAvg is unstable under real per-depot class imbalance
+# Federated learning across all 4 sites — FedProx is the primary result;
+# plain FedAvg is unstable under real per-site class imbalance
 python -m fleetmind.federated.run --strategy fedprox --mu 0.1 --rounds 30
 
 # Populate model_predictions + agent_decisions for the LangGraph chain
@@ -126,7 +126,7 @@ python -m fleetmind.agents.sync_equipment_status          # --dry-run to preview
 Current real results (see `CLAUDE.md` for the full write-up and the two
 architecture/data bugs that were fixed to get here — data leakage from a
 per-window split, and an `AdaptiveAvgPool1d` collapsing the fault-repetition
-signal): per-depot validation accuracy 62.7–72.5%; FedProx over 30 rounds
+signal): per-site validation accuracy 62.7–72.5%; FedProx over 30 rounds
 converges to a mean accuracy of 42.9% vs. a 60.0% mean local baseline — a
 real, documented federated-averaging gap under non-IID class imbalance, not
 a bug to "fix away."
@@ -192,5 +192,5 @@ docker-compose.yml      # postgres + api + migrate + frontend + adminer
 
 Case Western Reserve University (CWRU) Bearing Dataset — drive-end (DE)
 accelerometer, 12 kHz, fault classes: Normal / Ball / Inner Race / Outer Race,
-4 motor loads (0–3 HP → 4 simulated depots). Windowed at 2,048 samples.
+4 motor loads (0–3 HP → 4 simulated manufacturing sites). Windowed at 2,048 samples.
 Cite the original source: https://engineering.case.edu/bearingdatacenter

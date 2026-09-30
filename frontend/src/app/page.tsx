@@ -108,7 +108,7 @@ export default function DashboardPage() {
         <h1 className="text-3xl font-bold">FleetMind</h1>
         <p className="text-slate-600">
           Federated Intelligent Predictive Maintenance for Bearing Fault
-          Diagnosis — CWRU dataset, 4 simulated depots (motor load levels).
+          Diagnosis — CWRU dataset, 4 simulated manufacturing sites (motor load levels).
         </p>
       </header>
 
@@ -123,8 +123,8 @@ export default function DashboardPage() {
         <div className="mb-4">
           <h2 className="text-xl font-semibold">Model Performance: Local vs. Federated</h2>
           <p className="text-sm text-slate-500">
-            Honest, experiment-level-split results — each depot&apos;s own classifier vs. the
-            same architecture trained with FedProx across all 4 depots.
+            Honest, experiment-level-split results — each site&apos;s own classifier vs. the
+            same architecture trained with FedProx across all 4 sites.
           </p>
         </div>
         <ModelAccuracyChart />
@@ -132,7 +132,7 @@ export default function DashboardPage() {
 
       <section className="rounded-xl bg-white p-6 shadow">
         <h2 className="mb-4 text-xl font-semibold">
-          Simulated Depots (real CWRU load levels)
+          Simulated Sites (real CWRU load levels)
         </h2>
         <DepotTable />
       </section>

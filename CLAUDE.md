@@ -1,8 +1,21 @@
+## Product statement (authoritative — supersedes any conflicting wording below)
+
+FleetMind is a predictive-maintenance and field-service platform for rotating
+industrial machinery. A machine builder or service provider monitors motors and
+pumps installed in its customers' factories from their vibration signals, detects
+bearing faults early, backs every finding with inspectable evidence, and dispatches
+technicians. It recommends actions and humans decide. This is not a vehicle or car
+product, and any earlier wording in this repo that says "fleet", "depot" or
+"vehicle" in that sense is legacy and should be treated as superseded by this
+statement wherever you find it.
+
+---
+
 # FleetMind â€” Project Context for Claude Code
 
 **Federated Intelligent Predictive Maintenance for Bearing Fault Diagnosis** â€” M.Tech project (Debotri Ghosh, 25MML1008), VIT Chennai + LTIMindTree.
 
-Real dataset (CWRU Bearing Dataset â€” cite engineering.case.edu/bearingdatacenter), no synthetic data anywhere except the documented TimeGAN augmentation step. 4 real motor load levels (0/1/2/3 HP) act as 4 simulated depots.
+Real dataset (CWRU Bearing Dataset â€” cite engineering.case.edu/bearingdatacenter), no synthetic data anywhere except the documented TimeGAN augmentation step. 4 real motor load levels (0/1/2/3 HP) act as 4 simulated manufacturing sites. (The `depot` table/column naming is legacy for "site" and is deliberately kept -- renaming the schema is high-risk for low benefit; user-facing copy says "site".)
 
 ## Environment
 
@@ -54,6 +67,29 @@ Federated (`mlruns/federated/fedprox/federated.json`): FedProx (mu=0.1, 30 round
 
 3. **Federated instability**: plain FedAvg oscillated wildly round to round under real per-depot class imbalance. Switching to FedProx (`--strategy fedprox --mu 0.1`) stabilized it and closed roughly a third of the baseline gap. This is a known, published FL phenomenon (cited in the project's literature review) â€” a residual accuracy gap vs. local baselines is expected and documented, not something to eliminate by more debugging.
 
+## Open question — `LOAD_RISK_FACTOR` is keyed by site id, not motor load (found 2026-09-30, NOT fixed)
+
+`agents/agents.py` defines `LOAD_RISK_FACTOR = {0: 0.8, 1: 1.0, 2: 1.15, 3: 1.3}` — keys
+that look like `load_hp` values (0–3 HP). But `risk_agent()` looks it up with
+`state["depot_id"]`, which is the site **primary key** (1–4). The two are off by one, and
+site id 4 (Plant D, the 3 HP / highest-load site) isn't a key at all, so it silently falls
+through to the `1.0` default:
+
+| Site | load_hp | factor applied | factor if keyed by load_hp |
+|---|---|---|---|
+| Plant A | 0 | 1.00 | 0.80 |
+| Plant B | 1 | 1.15 | 1.00 |
+| Plant C | 2 | 1.30 | 1.15 |
+| Plant D | 3 | 1.00 *(default — not a key)* | 1.30 |
+
+So the most heavily loaded site currently gets the **lowest** load multiplier. This is a
+real logic bug, not cosmetic. It is deliberately **left unfixed** for now because
+(a) Slice E was a copy/audit pass, and (b) the Slice G brief says to keep the existing
+risk-score function exactly as-is while wrapping it as a tool. Fixing it changes every
+`risk_score` and therefore which equipment gets flagged — decide it explicitly, don't let
+it change as a side effect. Slice E fixed only the *display string*, which additionally
+printed the site id as if it were a horsepower figure ("2HP depot" for the 1 HP site).
+
 ## Known trade-off, not a bug
 
 TimeGAN/GAN-based augmentation (`augmentation/gan.py`) currently generates *time-domain* synthetic windows, but the classifier now trains on their FFT â€” synthetic windows can be time-domain-plausible while spectrally unrealistic, which is a likely reason augmentation sometimes hurts accuracy post-FFT-fix. Documented as a real limitation; not yet fixed.
@@ -62,7 +98,7 @@ TimeGAN/GAN-based augmentation (`augmentation/gan.py`) currently generates *time
 
 1. Wire `agent_decisions` (specifically `risk_score` / maintenance urgency) into `Equipment.status` â€” a "critical" decision should be able to flip a real equipment row to `maintenance_flagged`. This is the intended, honest bridge between the ML/agent layer and the product layer below.
 2. FastAPI routers for `equipment`, `service_requests`, `work_orders` (following the existing pattern in `api/routers/depots.py`).
-3. Next.js pages: customer view (browse equipment by depot, file a service request, track status) and depot-operator view (equipment board, work-order queue). Match existing `frontend/src/app/` structure and styling.
+3. Next.js pages: customer view (browse equipment by site, file a service request, track status) and site-operations view (equipment board, work-order queue). Match existing `frontend/src/app/` structure and styling.
 4. Location/GPS fields on `Equipment`/`WorkOrder` are explicitly **simulated** (CWRU has no location data) â€” keep this visibly labeled in any UI that shows them, never implied as real telemetry.
 
 ## Literature review (6 papers) and full implementation report
@@ -102,3 +138,5 @@ See `FleetMind_Implementation_Report.md` and `FleetMind_Literature_Review.md` in
 2026-09-22 10:30 — Wrap-up — final full-repo verification across all four hardened slices — verified via: `ruff check .`, `ruff format --check .`, `mypy fleetmind`, `pytest -q` from `backend/` (all clean, ~99 tests passing); `npx tsc --noEmit`, `npm run build` from `frontend/` (clean); `docker compose config` from repo root (resolves cleanly); a live Playwright check of `/`, `/customer`, `/operator` (zero console errors, zero failed requests); a live `curl` smoke test of every endpoint touched across this hardening pass (`/depots`, `/equipment`, `/service-requests` incl. `?ai_flagged=true`, `/work-orders`, `/customers`, `/technicians`, `/stats/model-performance`, `/stats/product-summary`, `/stats/fault-distribution`, plus bad `customer_id` -> 404 and `limit=0` -> 422) — all pass. Swept `OPEN_QUESTIONS.md`: never created, since every genuine design call across all four slices already had a reasoned default written directly into the plan docs — nothing needed escalating. `git log --oneline 4a56aac6^..HEAD` confirms 14 commits, one for every task marked done across all four slice files, each with a matching Progress log line. **One real, self-inflicted issue caught during this final pass**: running `npm run build` (production) in the same `frontend/` directory as an already-running `npm run dev` corrupts the dev server's `.next` cache — dev-mode asset manifests get overwritten by the production build's differently-shaped output, so every page starts 404ing on its own static JS/CSS chunks even though the app code itself is fine. Fixed by killing the dev server, deleting `.next`, restarting `npm run dev` fresh, then re-verified clean. **Lesson for future sessions**: never run `npm run build` in the same frontend directory as a live `npm run dev` — stop the dev server first (or use a separate checkout) and restart it fresh afterward. All four slices' "Hardening — do this now" checklists (`docs/plans/2026-09-21-fleetmind-implementation/01` through `04`) are now fully checked off. The project is in a clean, fully green, committed state.
 
 2026-09-25 — Dynamic (replay) workflow — turned the batch pipeline into an event-driven one, in 4 committed increments — verified via: `pytest -q` (137 passing, 38 new), `ruff check`/`ruff format --check`/`mypy fleetmind` (clean), `npx tsc --noEmit` + `npm run build` (clean), plus live end-to-end runs against the real DB and a Playwright drive of the real UI — result: pass. **Why it exists:** CWRU is a static archive, so a scheduler over it would recompute identical results on a timer — automation theater. Instead `signal_windows.released_at` (migration `0004`) marks *arrival*, and the replay engine progressively releases archived windows as if sensors were streaming them; the UI labels this "a replay of recorded data — not live telemetry, no sensors attached". **Pieces:** `ml/predict.py:predict_depot(incremental=True)` processes only arrived-and-unpredicted windows destroying nothing (default `False` keeps the documented batch behaviour byte-for-byte); `replay/engine.py` (release/status/reset); `pipeline.py:process_arrived_windows()` chains predict→agents→sync so the worker and the manual trigger share one code path; `replay/worker.py` ticks it on an asyncio task with the CPU-bound step offloaded to a thread; `/replay/{status,start,stop,step,reset}`; and a "Simulated Sensor Feed" panel on the operator console with start/pause/step/reset + a progress bar, which auto-refreshes the rest of the page each tick. **Live proof:** reset → 2 manual steps (25 windows each; first flipped an equipment to maintenance and filed an AI request) → worker start → 12 autonomous ticks → auto-stop at 4,367/4,367. **Two real bugs found and fixed during verification, both by actually running it:** (1) `asyncio.CancelledError` inherits from `BaseException`, so `contextlib.suppress(Exception)` around `await task` in `worker.stop()` let it escape as a 500 whose error response carries no CORS headers — which the browser reported as a misleading CORS error; fixed by naming `CancelledError` explicitly, and `tests/test_replay_worker.py` now exercises the *real* stop path (the API tests had mocked `worker.stop`, which is exactly why it slipped through — the regression test was confirmed to fail without the fix). (2) Stale zombie backend processes from earlier sessions were still holding port 8000 and serving old code, making the first browser run report phantom failures; note for future sessions: check `netstat -ano | grep :8000` and kill leftovers before trusting a live result — and be careful, an unrelated `groundwork` Streamlit app also runs Python on this machine and must not be killed.
+
+2026-09-30 — Slice E — domain reframe (vehicle/logistics framing -> industrial manufacturing) — verified via: `pytest -q` (137 passing), `ruff check`/`ruff format --check`/`mypy fleetmind` (clean), `npx tsc --noEmit` (clean), and a Playwright pass over `/`, `/customer`, `/operator` asserting zero legacy terms — result: pass, **zero** occurrences of Depot/depot/Logistics/Freight/Transport visible on any page, zero page errors. Audit first: `vehicle`/`Uber`/`Rapido`/`rider` appear **nowhere** in code (the only hits were CLAUDE.md's own product statement saying it is *not* a vehicle product) — the whole problem was `depot` plus transport-company seed names. Changed (user-facing + docs only): nav/heading `Depot Operator` -> **Site Operations**; table headers, dropdown labels and empty states `Depot`/`All depots` -> `Site`/`All sites`; dashboard prose "4 simulated depots" -> "4 simulated manufacturing sites"; `Customer`/`Equipment` model docstrings reframed; seed customers `Acme Logistics`/`Global Freight`/`Rapid Transport` -> `Acme Manufacturing`/`Northwind Steel`/`Pinnacle Processing`; site display names `depot_0hp..depot_3hp` -> `Plant A..D (CWRU N HP)` (user's choice: keep the CWRU mapping explicit on screen so every figure stays traceable to the dataset). Live DB rows for customers and depots were updated too, since the seed payload alone doesn't touch already-seeded data. **Deliberately unchanged** per instruction: `depots` table, all `depot_id` columns/query params, `/depots` route, TS `Depot` type, `DepotTable` component, `--depot-id` CLI flags, `mlruns/depot_N/` paths. Two real bugs surfaced by this pass: (1) the risk agent's factor string printed the **site id as if it were horsepower** ("2HP depot" for the 1 HP site) — the *text* is fixed (now "Higher-load site (load factor N)"), and the 4,367 stored decisions were regenerated through a full replay reset+run so the live demo carries the corrected wording (verified: `SELECT COUNT(*) ... LIKE '%depot%'` returns 0); (2) the underlying `LOAD_RISK_FACTOR` keying bug — see the "Open question" section above — is **left unfixed on purpose** because it changes every risk score, and Slice G's brief says keep the risk function as-is. Chart x-axis with the longer site labels verified by screenshot: no clipping or overlap.

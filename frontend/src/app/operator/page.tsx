@@ -30,7 +30,7 @@ function EquipmentBoard({ depotId }: { depotId: number | null }) {
       <thead>
         <tr className="border-b text-left text-slate-500">
           <th className="py-2">Equipment</th>
-          <th className="py-2">Depot</th>
+          <th className="py-2">Site</th>
           <th className="py-2">Type</th>
           <th className="py-2">Status</th>
         </tr>
@@ -314,7 +314,7 @@ export default function OperatorPage() {
       <Nav />
       <main className="mx-auto max-w-6xl space-y-8 p-8">
         <header className="space-y-1">
-          <h1 className="text-3xl font-bold">Depot Operator</h1>
+          <h1 className="text-3xl font-bold">Site Operations</h1>
           <p className="text-slate-600">
             Equipment status is kept in sync from the agent pipeline
             (fleetmind.agents.sync_equipment_status) — it is not editable here.
@@ -330,7 +330,7 @@ export default function OperatorPage() {
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-xl font-semibold">Equipment Board</h2>
             <label className="text-sm">
-              <span className="mr-2 font-medium">Depot</span>
+              <span className="mr-2 font-medium">Site</span>
               <select
                 className="rounded border bg-white px-2 py-1"
                 value={depotId ?? ""}
@@ -338,7 +338,7 @@ export default function OperatorPage() {
                   setDepotId(e.target.value === "" ? null : Number(e.target.value))
                 }
               >
-                <option value="">All depots</option>
+                <option value="">All sites</option>
                 {depots.data?.map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.name} ({d.load_hp}HP)
