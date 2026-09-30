@@ -1,9 +1,16 @@
 "use client";
 
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { api } from "@/lib/api";
-import { ErrorRetry, Nav, PriorityBadge, ReplayControls, StatusBadge } from "../components";
+import {
+  ErrorRetry,
+  EvidencePanel,
+  Nav,
+  PriorityBadge,
+  ReplayControls,
+  StatusBadge,
+} from "../components";
 import type { WorkOrderStatus } from "@/lib/types";
 
 const NEXT_STATUS: Partial<Record<WorkOrderStatus, WorkOrderStatus>> = {
@@ -59,6 +66,7 @@ function AiFlaggedPanel() {
     queryFn: () => api.serviceRequests({ ai_flagged: true }),
   });
   const equipment = useQuery({ queryKey: ["equipment", "all"], queryFn: () => api.equipment() });
+  const [openEvidenceFor, setOpenEvidenceFor] = useState<number | null>(null);
 
   if (requests.isLoading) return <p className="text-slate-500">Loading AI-flagged requests…</p>;
   if (requests.isError)
@@ -86,27 +94,46 @@ function AiFlaggedPanel() {
           <th className="py-2">Priority</th>
           <th className="py-2">Status</th>
           <th className="py-2">Agent Decision</th>
+          <th className="py-2">Evidence</th>
         </tr>
       </thead>
       <tbody>
         {requests.data.map((r) => (
-          <tr key={r.id} className="border-b align-top last:border-0">
-            <td className="py-2 font-medium">
-              {equipment.data?.find((e) => e.id === r.equipment_id)?.name ??
-                `Equipment #${r.equipment_id}`}
-            </td>
-            <td className="py-2">{r.predicted_fault ?? "—"}</td>
-            <td className="py-2">
-              {r.agent_risk_score !== null ? `${(r.agent_risk_score * 100).toFixed(0)}%` : "—"}
-            </td>
-            <td className="py-2">
-              <PriorityBadge priority={r.priority} />
-            </td>
-            <td className="py-2">
-              <StatusBadge status={r.status} />
-            </td>
-            <td className="max-w-md py-2 text-slate-600">{r.agent_decision_text ?? "—"}</td>
-          </tr>
+          <Fragment key={r.id}>
+            <tr className="border-b align-top last:border-0">
+              <td className="py-2 font-medium">
+                {equipment.data?.find((e) => e.id === r.equipment_id)?.name ??
+                  `Equipment #${r.equipment_id}`}
+              </td>
+              <td className="py-2">{r.predicted_fault ?? "—"}</td>
+              <td className="py-2">
+                {r.agent_risk_score !== null ? `${(r.agent_risk_score * 100).toFixed(0)}%` : "—"}
+              </td>
+              <td className="py-2">
+                <PriorityBadge priority={r.priority} />
+              </td>
+              <td className="py-2">
+                <StatusBadge status={r.status} />
+              </td>
+              <td className="max-w-md py-2 text-slate-600">{r.agent_decision_text ?? "—"}</td>
+              <td className="py-2">
+                <button
+                  type="button"
+                  onClick={() => setOpenEvidenceFor(openEvidenceFor === r.id ? null : r.id)}
+                  className="whitespace-nowrap rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  {openEvidenceFor === r.id ? "Hide evidence" : "Show evidence"}
+                </button>
+              </td>
+            </tr>
+            {openEvidenceFor === r.id && (
+              <tr className="border-b last:border-0">
+                <td colSpan={7} className="py-3">
+                  <EvidencePanel requestId={r.id} />
+                </td>
+              </tr>
+            )}
+          </Fragment>
         ))}
       </tbody>
     </table>

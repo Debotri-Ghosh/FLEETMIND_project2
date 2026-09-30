@@ -97,6 +97,58 @@ class ProductSummary(BaseModel):
     active_work_orders: int = Field(description="Work orders not in ('completed', 'cancelled').")
 
 
+class MatchedFrequency(BaseModel):
+    """The bearing characteristic frequency that corroborates the predicted fault.
+
+    Null for Normal (no defect frequency exists) — the UI must show "no band"
+    rather than drawing one."""
+
+    name: str
+    hz: float
+    band_low_hz: float
+    band_high_hz: float
+    harmonic: int
+
+
+class EvidencePackage(BaseModel):
+    """Inspectable evidence behind one AI-filed service request.
+
+    Everything here is derived from the one signal window that triggered the
+    decision, so a reviewer can check the finding rather than trust it."""
+
+    service_request_id: int
+    window_id: int
+    equipment_id: int | None
+    site_name: str | None = Field(default=None, description="Display name of the site.")
+
+    predicted_label: str
+    model_confidence: float | None = Field(
+        default=None, description="Softmax confidence of the CNN's predicted class."
+    )
+    model_version: str | None = None
+
+    raw_values: list[float] = Field(description="The window's raw vibration samples.")
+    sampling_rate_hz: int
+    spectrum_freqs_hz: list[float] = Field(
+        description="Frequency axis (Hz) of the plain magnitude spectrum."
+    )
+    spectrum_magnitudes: list[float] = Field(
+        description="Raw FFT magnitudes — NOT the log-scaled, z-normalized tensor the "
+        "CNN consumes; this axis is meant to be readable by a person."
+    )
+    matched_frequency: MatchedFrequency | None = None
+    all_characteristic_frequencies: dict[str, float] = Field(
+        description="BPFI/BPFO/BSF/FTF for this shaft speed and bearing."
+    )
+
+    signal_rms: float = Field(description="Recomputed by the diagnostic agent's own function.")
+    signal_peak: float
+    diagnosis: str
+    diagnosis_confidence: float
+    risk_score: float | None = None
+    decision_text: str | None = None
+
+
 class ReplayStatusResponse(BaseModel):
     """Progress of the simulated sensor feed over the static CWRU archive."""
 

@@ -121,6 +121,8 @@ export const api = {
         ai_flagged: params?.ai_flagged,
       })}`
     ),
+  serviceRequestEvidence: (requestId: number) =>
+    getJson<import("./types").EvidencePackage>(`/service-requests/${requestId}/evidence`),
   createServiceRequest: (payload: import("./types").ServiceRequestCreate) =>
     sendJson<import("./types").ServiceRequest>("POST", "/service-requests", payload),
   workOrders: (params?: {

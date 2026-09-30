@@ -148,6 +148,36 @@ export interface ModelPerformance {
   federated: FederatedSummary | null;
 }
 
+export interface MatchedFrequency {
+  name: string;
+  hz: number;
+  band_low_hz: number;
+  band_high_hz: number;
+  harmonic: number;
+}
+
+export interface EvidencePackage {
+  service_request_id: number;
+  window_id: number;
+  equipment_id: number | null;
+  site_name: string | null;
+  predicted_label: string;
+  model_confidence: number | null;
+  model_version: string | null;
+  raw_values: number[];
+  sampling_rate_hz: number;
+  spectrum_freqs_hz: number[];
+  spectrum_magnitudes: number[];
+  matched_frequency: MatchedFrequency | null;
+  all_characteristic_frequencies: Record<string, number>;
+  signal_rms: number;
+  signal_peak: number;
+  diagnosis: string;
+  diagnosis_confidence: number;
+  risk_score: number | null;
+  decision_text: string | null;
+}
+
 export interface ReplayTick {
   at: string;
   released: number;

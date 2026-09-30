@@ -11,12 +11,14 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 
 const NAV_LINKS = [
   { href: "/", label: "Dashboard" },
@@ -267,6 +269,182 @@ export function ReplayControls() {
       {(note || data?.worker.last_error) && (
         <p className="text-xs text-red-600">{note ?? data?.worker.last_error}</p>
       )}
+    </div>
+  );
+}
+
+/** The evidence behind one AI-filed request: the signal it was decided from,
+ * its spectrum with the corroborating bearing defect frequency marked, the
+ * model's confidence, and the diagnostic agent's own statistics.
+ *
+ * The point is that a reviewer can *check* the finding instead of trusting
+ * it -- so the copy is careful about what the band does and doesn't mean. */
+export function EvidencePanel({ requestId }: { requestId: number }) {
+  const evidence = useQuery({
+    queryKey: ["evidence", requestId],
+    queryFn: () => api.serviceRequestEvidence(requestId),
+  });
+
+  if (evidence.isLoading) return <p className="text-slate-500">Loading evidence…</p>;
+  if (evidence.isError)
+    return (
+      <ErrorRetry
+        message={
+          evidence.error instanceof ApiError
+            ? evidence.error.message
+            : "Failed to load evidence."
+        }
+        onRetry={() => evidence.refetch()}
+      />
+    );
+
+  const e = evidence.data;
+  if (!e) return null;
+
+  const waveform = e.raw_values.map((v, i) => ({
+    ms: Number(((i / e.sampling_rate_hz) * 1000).toFixed(3)),
+    amplitude: v,
+  }));
+  const spectrumData = e.spectrum_freqs_hz.map((hz, i) => ({
+    hz,
+    magnitude: e.spectrum_magnitudes[i],
+  }));
+  const band = e.matched_frequency;
+
+  return (
+    <div className="space-y-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
+        <span>
+          <span className="text-slate-500">Signal window</span>{" "}
+          <span className="font-mono font-medium">#{e.window_id}</span>
+        </span>
+        <span>
+          <span className="text-slate-500">Site</span>{" "}
+          <span className="font-medium">{e.site_name ?? "—"}</span>
+        </span>
+        <span>
+          <span className="text-slate-500">Model</span>{" "}
+          <span className="font-medium">{e.predicted_label}</span>
+          {e.model_confidence !== null && (
+            <span className="text-slate-500">
+              {" "}
+              at {(e.model_confidence * 100).toFixed(1)}% confidence
+            </span>
+          )}
+        </span>
+        {e.model_version && (
+          <span>
+            <span className="text-slate-500">Checkpoint</span>{" "}
+            <span className="font-mono text-xs">{e.model_version}</span>
+          </span>
+        )}
+      </div>
+
+      <div>
+        <h4 className="mb-1 text-sm font-semibold">Raw vibration signal</h4>
+        <p className="mb-2 text-xs text-slate-500">
+          The exact window this decision was made from — {e.raw_values.length} samples at{" "}
+          {e.sampling_rate_hz.toLocaleString()} Hz.
+        </p>
+        <ResponsiveContainer width="100%" height={160}>
+          <LineChart data={waveform}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e1e0d9" />
+            <XAxis
+              dataKey="ms"
+              tick={{ fontSize: 11 }}
+              label={{ value: "ms", position: "insideBottomRight", offset: -4, fontSize: 11 }}
+            />
+            <YAxis tick={{ fontSize: 11 }} />
+            <Tooltip formatter={(v: number) => v.toFixed(4)} />
+            <Line dataKey="amplitude" stroke="#2563eb" dot={false} strokeWidth={1} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div>
+        <h4 className="mb-1 text-sm font-semibold">Frequency spectrum</h4>
+        <p className="mb-2 text-xs text-slate-500">
+          {band ? (
+            <>
+              The shaded band is <span className="font-medium">{band.name}</span> ={" "}
+              {band.hz} Hz ({band.band_low_hz}–{band.band_high_hz} Hz), the frequency a{" "}
+              {e.predicted_label} defect produces at this site&apos;s shaft speed. Energy sitting
+              on that band is independent physical corroboration of the call — it is{" "}
+              <span className="font-medium">not</span> what the model looked at; the CNN reads a
+              log-scaled, normalised spectrum and was never given these frequencies.
+            </>
+          ) : (
+            <>
+              No defect band is drawn: {e.predicted_label} has no characteristic fault frequency
+              to corroborate against.
+            </>
+          )}
+        </p>
+        <ResponsiveContainer width="100%" height={180}>
+          <LineChart data={spectrumData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e1e0d9" />
+            <XAxis
+              dataKey="hz"
+              type="number"
+              domain={[0, "dataMax"]}
+              tick={{ fontSize: 11 }}
+              label={{ value: "Hz", position: "insideBottomRight", offset: -4, fontSize: 11 }}
+            />
+            <YAxis tick={{ fontSize: 11 }} />
+            <Tooltip
+              formatter={(v: number) => v.toFixed(3)}
+              labelFormatter={(hz) => `${hz} Hz`}
+            />
+            {band && (
+              <ReferenceArea
+                x1={band.band_low_hz}
+                x2={band.band_high_hz}
+                fill="#eb6834"
+                fillOpacity={0.18}
+              />
+            )}
+            {band && (
+              <ReferenceLine
+                x={band.hz}
+                stroke="#c85a28"
+                strokeDasharray="4 3"
+                label={{ value: band.name, position: "top", fontSize: 11, fill: "#c85a28" }}
+              />
+            )}
+            <Line dataKey="magnitude" stroke="#2563eb" dot={false} strokeWidth={1.5} />
+          </LineChart>
+        </ResponsiveContainer>
+        <p className="mt-1 text-xs text-slate-500">
+          All defect frequencies at this shaft speed:{" "}
+          {Object.entries(e.all_characteristic_frequencies)
+            .map(([k, v]) => `${k} ${v} Hz`)
+            .join(" · ")}
+        </p>
+      </div>
+
+      <div>
+        <h4 className="mb-1 text-sm font-semibold">Diagnostic agent statistics</h4>
+        <p className="mb-2 text-xs text-slate-500">
+          Recomputed from the window above with the same function that produced the decision
+          (only the decision text and risk score are stored).
+        </p>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <StatTile label="Signal RMS" value={e.signal_rms.toFixed(4)} />
+          <StatTile label="Peak-to-peak" value={e.signal_peak.toFixed(4)} />
+          <StatTile
+            label="Diagnosis confidence"
+            value={`${(e.diagnosis_confidence * 100).toFixed(0)}%`}
+          />
+          <StatTile
+            label="Risk score"
+            value={e.risk_score !== null ? `${(e.risk_score * 100).toFixed(0)}%` : "—"}
+            accent={e.risk_score !== null && e.risk_score >= 0.7 ? "text-red-700" : undefined}
+          />
+        </div>
+        <p className="mt-2 text-xs text-slate-600">
+          <span className="text-slate-500">Diagnosis:</span> {e.diagnosis}
+        </p>
+      </div>
     </div>
   );
 }
