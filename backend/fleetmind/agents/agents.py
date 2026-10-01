@@ -1,9 +1,14 @@
 """The four FleetMind agents.
 
 Each agent is a pure function (state -> state) so it is trivially testable
-and can run without an LLM. The optional LLM layer (llm.py) enriches the
-diagnosis and maintenance text when AZURE_OPENAI / Ollama credentials are
-configured; otherwise the agents use deterministic rule-based logic.
+and runs without an LLM. These four are the authoritative decision path: they
+produce the risk score that flips equipment into maintenance and files a
+service request, and nothing in llm.py can change what they decide.
+
+The optional LLM layer (llm.py) sits strictly on top: it calls these same
+functions through agents/tools.py and writes the prose a technician reads.
+(The earlier docstring here promised an AZURE_OPENAI / Ollama enrichment that
+was never built -- there was no llm.py at all until Slice G.)
 """
 
 from __future__ import annotations

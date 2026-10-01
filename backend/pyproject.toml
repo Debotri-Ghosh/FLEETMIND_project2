@@ -27,6 +27,13 @@ ml = [
 ingest = [
     "kagglehub>=0.2.9",
 ]
+# The LLM narrative layer (fleetmind/agents/llm.py). Optional because the whole
+# rule-based decision pipeline runs without it -- `anthropic` is imported lazily
+# inside get_client() so an install without this extra still boots the API, and
+# the narrative endpoint returns a clear 503 rather than an ImportError.
+llm = [
+    "anthropic>=1.11",
+]
 dev = [
     "pytest>=8.2",
     "httpx>=0.27",

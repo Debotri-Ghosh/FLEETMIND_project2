@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -445,6 +445,164 @@ export function EvidencePanel({ requestId }: { requestId: number }) {
           <span className="text-slate-500">Diagnosis:</span> {e.diagnosis}
         </p>
       </div>
+
+      <NarrativePanel requestId={requestId} />
+    </div>
+  );
+}
+
+const CORROBORATION_STYLE: Record<string, string> = {
+  strong: "bg-green-100 text-green-800",
+  partial: "bg-amber-100 text-amber-800",
+  weak: "bg-orange-100 text-orange-800",
+  none: "bg-slate-200 text-slate-700",
+};
+
+/** Claude's write-up of one AI-filed request.
+ *
+ * Generation is an explicit button press, not an automatic fetch on expand:
+ * it costs a real API call. Once generated the result is cached server-side,
+ * so reopening the panel is free. */
+export function NarrativePanel({ requestId }: { requestId: number }) {
+  const queryClient = useQueryClient();
+  const cached = useQuery({
+    queryKey: ["narrative", requestId],
+    queryFn: () => api.serviceRequestNarrative(requestId),
+    // A 404 here means "not generated yet", which is a normal state, not a
+    // failure worth retrying.
+    retry: false,
+  });
+
+  const generate = useMutation({
+    mutationFn: (force: boolean) => api.generateServiceRequestNarrative(requestId, force),
+    onSuccess: (data) => queryClient.setQueryData(["narrative", requestId], data),
+  });
+
+  const narrative = generate.data ?? cached.data;
+  const notYetGenerated =
+    cached.isError && cached.error instanceof ApiError && cached.error.status === 404;
+
+  if (cached.isLoading) return <p className="text-xs text-slate-500">Checking for a write-up…</p>;
+
+  if (cached.isError && !notYetGenerated && !narrative) {
+    return (
+      <ErrorRetry
+        message={
+          cached.error instanceof ApiError ? cached.error.message : "Failed to load write-up."
+        }
+        onRetry={() => cached.refetch()}
+      />
+    );
+  }
+
+  return (
+    <div>
+      <div className="mb-1 flex flex-wrap items-center gap-3">
+        <h4 className="text-sm font-semibold">Engineer&apos;s write-up (Claude)</h4>
+        {narrative && (
+          <span
+            className={`rounded px-2 py-0.5 text-xs font-medium ${
+              CORROBORATION_STYLE[narrative.corroboration] ?? CORROBORATION_STYLE.none
+            }`}
+          >
+            {narrative.corroboration} corroboration
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => generate.mutate(Boolean(narrative))}
+          disabled={generate.isPending}
+          className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium hover:bg-slate-100 disabled:opacity-50"
+        >
+          {generate.isPending
+            ? "Generating…"
+            : narrative
+              ? "Regenerate"
+              : "Generate write-up"}
+        </button>
+      </div>
+
+      <p className="mb-2 text-xs text-slate-500">
+        A language model wrote this prose by reasoning over the same deterministic functions
+        shown above, which it called as tools. It supplies{" "}
+        <span className="font-medium">no numbers of its own</span> — every figure came back from
+        a tool, and anything untraceable is listed below. The risk score and urgency are
+        unchanged by it, and a human still decides.
+      </p>
+
+      {generate.isError && (
+        <p className="mb-2 rounded bg-red-50 p-2 text-xs text-red-700">
+          {generate.error instanceof ApiError
+            ? generate.error.message
+            : "Write-up generation failed."}
+        </p>
+      )}
+
+      {!narrative && !generate.isPending && (
+        <p className="text-xs text-slate-500">
+          No write-up generated yet for this request.
+        </p>
+      )}
+
+      {narrative && (
+        <div className="space-y-3 rounded border border-slate-200 bg-white p-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Diagnosis
+            </p>
+            <p className="text-sm text-slate-800">{narrative.diagnosis_narrative}</p>
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Recommendation
+            </p>
+            <p className="text-sm text-slate-800">{narrative.maintenance_recommendation}</p>
+          </div>
+          {narrative.evidence_cited.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Figures relied on
+              </p>
+              <ul className="list-inside list-disc text-xs text-slate-600">
+                {narrative.evidence_cited.map((item) => (
+                  <li key={item} className="font-mono">
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {narrative.ungrounded_numbers.length > 0 && (
+            <p className="rounded bg-amber-50 p-2 text-xs text-amber-800">
+              Grounding check: {narrative.ungrounded_numbers.join(", ")} could not be traced to
+              any tool result. Treat those figures as unverified.
+            </p>
+          )}
+          <details className="text-xs text-slate-600">
+            <summary className="cursor-pointer text-slate-500">
+              Tool calls behind this write-up ({narrative.tool_calls.length})
+            </summary>
+            <ul className="mt-2 space-y-2">
+              {narrative.tool_calls.map((call, i) => (
+                <li key={`${call.tool}-${i}`}>
+                  <span className="font-mono font-medium">{call.tool}</span>
+                  {Object.keys(call.input).length > 0 && (
+                    <span className="font-mono"> {JSON.stringify(call.input)}</span>
+                  )}
+                  <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-2 font-mono text-[11px]">
+                    {call.result}
+                  </pre>
+                </li>
+              ))}
+            </ul>
+          </details>
+          <p className="text-xs text-slate-400">
+            {narrative.model} · {narrative.input_tokens.toLocaleString()} in /{" "}
+            {narrative.output_tokens.toLocaleString()} out tokens ·{" "}
+            {narrative.cached ? "cached" : "generated just now"}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

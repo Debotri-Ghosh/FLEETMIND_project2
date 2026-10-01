@@ -1,7 +1,7 @@
 """Pydantic response schemas for the FleetMind API."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -287,3 +287,43 @@ class WorkOrderCreate(BaseModel):
 
 class WorkOrderStatusUpdate(BaseModel):
     status: Literal["assigned", "traveling", "in_progress", "completed", "cancelled"]
+
+
+class NarrativeToolCall(BaseModel):
+    """One tool the model called while writing a narrative, and what it got back.
+
+    Persisted verbatim so any sentence in the narrative can be checked against
+    the figures the model was actually handed."""
+
+    tool: str
+    input: dict[str, Any] = Field(default_factory=dict)
+    result: str
+
+
+class ServiceRequestNarrative(BaseModel):
+    """Claude's write-up of one AI-filed service request.
+
+    Prose only. Every figure in it came from a deterministic tool; the model
+    is not permitted to originate a number, and `ungrounded_numbers` lists
+    anything the post-hoc grounding check could not trace back to a tool
+    result (normally empty)."""
+
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+
+    service_request_id: int
+    model: str
+    diagnosis_narrative: str
+    maintenance_recommendation: str
+    corroboration: Literal["strong", "partial", "weak", "none"]
+    evidence_cited: list[str] = Field(default_factory=list)
+    tool_calls: list[NarrativeToolCall] = Field(default_factory=list)
+    ungrounded_numbers: list[str] = Field(
+        default_factory=list,
+        description="Numbers in the prose not found in any tool result. Should be empty.",
+    )
+    input_tokens: int = 0
+    output_tokens: int = 0
+    created_at: datetime
+    cached: bool = Field(
+        default=True, description="False when this response generated a fresh API call."
+    )

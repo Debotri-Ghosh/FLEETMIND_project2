@@ -222,3 +222,27 @@ export interface ProductSummary {
   ai_flagged_open: number;
   active_work_orders: number;
 }
+
+export interface NarrativeToolCall {
+  tool: string;
+  input: Record<string, unknown>;
+  result: string;
+}
+
+export type Corroboration = "strong" | "partial" | "weak" | "none";
+
+export interface ServiceRequestNarrative {
+  service_request_id: number;
+  model: string;
+  diagnosis_narrative: string;
+  maintenance_recommendation: string;
+  corroboration: Corroboration;
+  evidence_cited: string[];
+  tool_calls: NarrativeToolCall[];
+  /** Numbers in the prose that no tool result accounts for. Normally empty. */
+  ungrounded_numbers: string[];
+  input_tokens: number;
+  output_tokens: number;
+  created_at: string;
+  cached: boolean;
+}

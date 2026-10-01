@@ -20,6 +20,14 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     app_version: str = "0.1.0"
 
+    # LLM narrative layer (fleetmind/agents/llm.py). Absent by default and
+    # read from backend/.env like every other setting here, rather than from
+    # the SDK's own ANTHROPIC_API_KEY lookup, so one file configures the whole
+    # backend. With no key the rule-based decision layer still works in full;
+    # only narrative generation returns 503.
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-sonnet-5"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

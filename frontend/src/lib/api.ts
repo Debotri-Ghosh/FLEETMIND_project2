@@ -123,6 +123,17 @@ export const api = {
     ),
   serviceRequestEvidence: (requestId: number) =>
     getJson<import("./types").EvidencePackage>(`/service-requests/${requestId}/evidence`),
+  serviceRequestNarrative: (requestId: number) =>
+    getJson<import("./types").ServiceRequestNarrative>(
+      `/service-requests/${requestId}/narrative`
+    ),
+  /** Costs a real Claude API call unless one is already cached. */
+  generateServiceRequestNarrative: (requestId: number, force = false) =>
+    sendJson<import("./types").ServiceRequestNarrative>(
+      "POST",
+      `/service-requests/${requestId}/narrative${force ? "?force=true" : ""}`,
+      {}
+    ),
   createServiceRequest: (payload: import("./types").ServiceRequestCreate) =>
     sendJson<import("./types").ServiceRequest>("POST", "/service-requests", payload),
   workOrders: (params?: {

@@ -236,6 +236,41 @@ class ServiceRequest(Base):
     )
 
 
+class LLMNarrative(Base):
+    """A cached Claude-written write-up of one AI-filed service request.
+
+    The narrative is prose only. Every figure quoted inside it came back from
+    a tool in `agents/tools.py`, which wraps the same deterministic functions
+    that produced the stored decision -- the model never originates a number
+    (see agents/llm.py). `tool_calls` persists the full call-and-result trail
+    so a reviewer can check any sentence against what the model was actually
+    handed, and `ungrounded_numbers` records anything the post-hoc grounding
+    check could not trace back.
+
+    One row per service request (unique FK): generation is on demand and this
+    table is the cache, so reopening the panel costs nothing.
+    """
+
+    __tablename__ = "llm_narratives"
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
+    service_request_id: Mapped[int] = mapped_column(
+        ForeignKey("service_requests.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    diagnosis_narrative: Mapped[str] = mapped_column(Text, nullable=False)
+    maintenance_recommendation: Mapped[str] = mapped_column(Text, nullable=False)
+    corroboration: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_cited: Mapped[list[Any]] = mapped_column(RawValuesType, nullable=False)
+    tool_calls: Mapped[list[Any]] = mapped_column(RawValuesType, nullable=False)
+    ungrounded_numbers: Mapped[list[Any]] = mapped_column(RawValuesType, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class WorkOrder(Base):
     """Technician dispatch tracking for a service request."""
 

@@ -1,11 +1,20 @@
 """Service-request endpoints: customers file requests, depot operators triage them."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from fleetmind.agents.agents import diagnostic_agent
-from fleetmind.api.schemas import EvidencePackage, MatchedFrequency, ServiceRequestCreate
+from fleetmind.agents.llm import LLMNotConfigured, generate_narrative
+from fleetmind.agents.tools import EvidenceContext
+from fleetmind.api.schemas import (
+    EvidencePackage,
+    MatchedFrequency,
+    ServiceRequestCreate,
+    ServiceRequestNarrative,
+)
 from fleetmind.api.schemas import ServiceRequest as ServiceRequestSchema
 from fleetmind.db import session as db_session
 from fleetmind.db.models import (
@@ -14,6 +23,7 @@ from fleetmind.db.models import (
     Depot,
     Equipment,
     Experiment,
+    LLMNarrative,
     ModelPrediction,
     SignalWindow,
 )
@@ -23,6 +33,8 @@ from fleetmind.ml.bearing_freq import (
     matched_frequency_for_fault,
     spectrum,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/service-requests", tags=["service-requests"])
 
@@ -90,19 +102,13 @@ def get_service_request(request_id: int, db: Session = Depends(db_session.get_se
     return _with_agent_context(row)
 
 
-@router.get("/{request_id}/evidence", response_model=EvidencePackage)
-def get_evidence(request_id: int, db: Session = Depends(db_session.get_session)):
-    """Inspectable evidence behind an AI-filed request.
+def _evidence_chain(db: Session, request_id: int):
+    """Walk ServiceRequest -> AgentDecision -> Prediction -> Window -> Experiment -> Depot.
 
-    Walks the chain the decision was actually made through:
-      ServiceRequest -> AgentDecision -> ModelPrediction -> SignalWindow
-                     -> Experiment -> Depot (for shaft speed)
-
-    The diagnostic stats are *recomputed* here with the same
-    `agents.agents._signal_stats` / `diagnostic_agent` functions that produced
-    the decision, because only `decision_text` and `risk_score` are persisted.
-    Same function, same input, same numbers -- but it is a recomputation, not
-    a read-back, and is labelled as such in the UI.
+    Shared by the evidence package and the LLM narrative so both are
+    guaranteed to describe the same window; a mismatch between the plots a
+    reviewer looks at and the numbers the narrative quotes would be worse
+    than having neither.
     """
     row = db.execute(
         select(
@@ -135,8 +141,55 @@ def get_evidence(request_id: int, db: Session = Depends(db_session.get_session))
                 "(customer-filed requests carry no model evidence)"
             ),
         )
+    return row
 
-    service_request, decision, prediction, window, experiment, depot = row
+
+def _evidence_context(db: Session, request_id: int) -> EvidenceContext:
+    """The same chain, packaged for the LLM tools."""
+    service_request, decision, prediction, window, experiment, depot = _evidence_chain(
+        db, request_id
+    )
+    equipment = (
+        db.get(Equipment, service_request.equipment_id)
+        if service_request.equipment_id is not None
+        else None
+    )
+    return EvidenceContext(
+        service_request_id=service_request.id,
+        window_id=window.id,
+        equipment_name=equipment.name if equipment else None,
+        site_name=depot.name,
+        depot_id=depot.id,
+        load_hp=depot.load_hp,
+        nominal_rpm=float(depot.nominal_rpm or 1797),
+        sensor_position=experiment.sensor_position,
+        sampling_rate_hz=experiment.sampling_rate_hz,
+        predicted_label=prediction.predicted_label,
+        model_confidence=prediction.confidence,
+        model_version=prediction.model_version,
+        raw_values=[float(v) for v in (window.raw_values or [])],
+        stored_risk_score=decision.risk_score,
+        stored_decision_text=decision.decision_text,
+    )
+
+
+@router.get("/{request_id}/evidence", response_model=EvidencePackage)
+def get_evidence(request_id: int, db: Session = Depends(db_session.get_session)):
+    """Inspectable evidence behind an AI-filed request.
+
+    Walks the chain the decision was actually made through:
+      ServiceRequest -> AgentDecision -> ModelPrediction -> SignalWindow
+                     -> Experiment -> Depot (for shaft speed)
+
+    The diagnostic stats are *recomputed* here with the same
+    `agents.agents._signal_stats` / `diagnostic_agent` functions that produced
+    the decision, because only `decision_text` and `risk_score` are persisted.
+    Same function, same input, same numbers -- but it is a recomputation, not
+    a read-back, and is labelled as such in the UI.
+    """
+    service_request, decision, prediction, window, experiment, depot = _evidence_chain(
+        db, request_id
+    )
     values = [float(v) for v in (window.raw_values or [])]
 
     diagnostic = diagnostic_agent(
@@ -176,6 +229,82 @@ def get_evidence(request_id: int, db: Session = Depends(db_session.get_session))
         risk_score=decision.risk_score,
         decision_text=decision.decision_text,
     )
+
+
+def _narrative_response(row: LLMNarrative, cached: bool) -> ServiceRequestNarrative:
+    return ServiceRequestNarrative.model_validate(row).model_copy(update={"cached": cached})
+
+
+@router.get("/{request_id}/narrative", response_model=ServiceRequestNarrative)
+def get_narrative(request_id: int, db: Session = Depends(db_session.get_session)):
+    """Return the cached narrative, if one has been generated.
+
+    Read-only and free: a 404 here means "not generated yet", not an error.
+    Generation costs a real API call and is therefore an explicit POST.
+    """
+    row = db.execute(
+        select(LLMNarrative).where(LLMNarrative.service_request_id == request_id)
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no narrative generated yet for service request {request_id}",
+        )
+    return _narrative_response(row, cached=True)
+
+
+@router.post("/{request_id}/narrative", response_model=ServiceRequestNarrative)
+def create_narrative(
+    request_id: int,
+    force: bool = Query(
+        default=False,
+        description="Regenerate even if a narrative is cached. Costs another API call.",
+    ),
+    db: Session = Depends(db_session.get_session),
+):
+    """Generate (or return the cached) Claude narrative for an AI-filed request.
+
+    POST rather than GET because the uncached path spends money and is not
+    idempotent in cost, even though it is idempotent in effect. The cached
+    path is returned without calling the API at all unless `force=true`.
+    """
+    existing = db.execute(
+        select(LLMNarrative).where(LLMNarrative.service_request_id == request_id)
+    ).scalar_one_or_none()
+    if existing is not None and not force:
+        return _narrative_response(existing, cached=True)
+
+    context = _evidence_context(db, request_id)
+    try:
+        result = generate_narrative(context)
+    except LLMNotConfigured as exc:
+        # 503, not 500: the service is correctly built and simply unconfigured.
+        # The rule-based decision for this request already exists regardless.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - surface the provider's own message
+        logger.exception("narrative generation failed for service request %s", request_id)
+        raise HTTPException(status_code=502, detail=f"narrative generation failed: {exc}") from exc
+
+    if existing is not None:
+        db.delete(existing)
+        db.flush()
+
+    row = LLMNarrative(
+        service_request_id=request_id,
+        model=result.model,
+        diagnosis_narrative=result.diagnosis_narrative,
+        maintenance_recommendation=result.maintenance_recommendation,
+        corroboration=result.corroboration,
+        evidence_cited=result.evidence_cited,
+        tool_calls=result.tool_calls,
+        ungrounded_numbers=result.ungrounded_numbers,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _narrative_response(row, cached=False)
 
 
 @router.post("", response_model=ServiceRequestSchema, status_code=201)

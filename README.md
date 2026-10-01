@@ -123,6 +123,34 @@ python -m fleetmind.agents.run --all-pending
 python -m fleetmind.agents.sync_equipment_status          # --dry-run to preview
 ```
 
+### Optional: the LLM write-up layer
+
+Everything above is deterministic Python. One further, optional step adds a
+real Claude call that turns a flagged request into the prose a technician
+reads:
+
+```bash
+pip install -e ".[llm]"                 # from backend/
+echo 'ANTHROPIC_API_KEY=sk-ant-...'  >> .env
+
+curl -X POST localhost:8000/service-requests/41/narrative
+```
+
+The model is given **no raw signal and no arithmetic**. It can only call four
+tools (`fleetmind/agents/tools.py`) that wrap the same functions which already
+produced the stored decision — signal statistics, the rule-based risk
+assessment, the bearing characteristic frequencies, and a spectral band-energy
+probe — and it is forbidden to state a figure that did not come back from one.
+A post-hoc check (`verify_numbers_are_grounded`) looks for any number in the
+prose that no tool result accounts for and stores what it finds alongside the
+narrative, so the guard's own track record is inspectable.
+
+Narratives are cached in `llm_narratives` (one row per service request), so
+generation costs one API call per flagged machine, not one per page view. With
+no key configured the endpoint returns a clear `503` and nothing else changes:
+predictions, risk scores, equipment flagging and auto-filed service requests
+are all unaffected.
+
 Current real results (see `CLAUDE.md` for the full write-up and the two
 architecture/data bugs that were fixed to get here — data leakage from a
 per-window split, and an `AdaptiveAvgPool1d` collapsing the fault-repetition
@@ -168,6 +196,7 @@ backend/
     federated/          # Flower FedAvg/FedProx simulation
     agents/             # LangGraph Monitor->Diagnostic->Risk->Maintenance chain,
                          #   + sync_equipment_status (the ML -> product bridge)
+                         #   + tools.py / llm.py (the optional Claude write-up layer)
   alembic/              # migrations (0001 core schema, 0002 product-layer schema)
   tests/                # pytest suite (sqlite-backed)
 frontend/
@@ -187,6 +216,14 @@ docker-compose.yml      # postgres + api + migrate + frontend + adminer
 - The federated accuracy gap vs. local baselines (see above) is a known,
   published FL phenomenon under real class imbalance — presented as a
   finding, not concealed.
+- The bearing characteristic frequencies shown as evidence are **independent
+  corroboration, not an explanation of the model**. The CNN consumes a
+  log-scaled, z-normalised FFT magnitude and was never given these
+  frequencies; the UI says so wherever a defect band is drawn.
+- The LLM write-up is prose about numbers it was handed, not an analysis. It
+  cannot change a risk score, an urgency or an equipment status — every one of
+  those still comes from rule-based code — and the grounding check that backs
+  this up is a blunt numeric scan, not a proof.
 
 ## Dataset
 
