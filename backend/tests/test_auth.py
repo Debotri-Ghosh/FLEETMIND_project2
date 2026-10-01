@@ -310,13 +310,20 @@ def test_a_customer_is_forbidden_from_operator_surfaces(customer_client, method,
     assert "customer" in resp.json()["detail"]
 
 
-def test_a_customer_cannot_spend_money_on_a_narrative(customer_client, product_client):
-    """Generating costs a real API call, so it is operator/admin only."""
+def test_a_customer_cannot_spend_money_on_a_narrative(customer_client, product_session):
+    """Generating a write-up costs a real API call, so it is operator/admin only.
+
+    A customer may still *read* one about their own machine; only generation
+    is restricted, so a tenant cannot run up a bill.
+    """
     from fleetmind.agents.sync_equipment_status import sync_equipment_status
+
+    sync_equipment_status(product_session)
+    product_session.commit()
 
     resp = customer_client.post("/service-requests/1/narrative")
     assert resp.status_code == 403
-    assert sync_equipment_status is not None  # import kept meaningful
+    assert "customer" in resp.json()["detail"]
 
 
 # ── operator scope ─────────────────────────────────────────────────────
