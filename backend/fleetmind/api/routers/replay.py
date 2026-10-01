@@ -17,11 +17,14 @@ from fleetmind.api.schemas import (
     ReplayStatusResponse,
     ReplayTickResponse,
 )
+from fleetmind.auth.deps import require_admin
 from fleetmind.db import session as db_session
 from fleetmind.replay.engine import replay_status, reset_replay
 from fleetmind.replay.worker import worker
 
-router = APIRouter(prefix="/replay", tags=["replay"])
+# Replay mutates the whole dataset -- predictions, decisions, equipment
+# status. Admin only; an operator must not be able to reset the archive.
+router = APIRouter(prefix="/replay", tags=["replay"], dependencies=[Depends(require_admin)])
 
 
 @router.get("/status", response_model=ReplayStatusResponse)

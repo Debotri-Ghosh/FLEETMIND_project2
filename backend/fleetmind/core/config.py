@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-sonnet-5"
 
+    # Auth. jwt_secret has NO fallback on purpose -- unlike database_url
+    # above, a well-known default signing key would let anyone who has read
+    # this repository mint an admin token. When it is unset, auth/tokens.py
+    # generates a random per-process secret and logs a warning: tokens stop
+    # surviving a restart, which is a visible nuisance rather than a silent
+    # hole. Set JWT_SECRET in backend/.env for anything beyond a local demo.
+    jwt_secret: str | None = None
+    access_token_ttl_minutes: int = 720  # 12h: long enough for a demo session
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

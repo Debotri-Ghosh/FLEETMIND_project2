@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "@/lib/api";
+import { RequireAuth } from "./auth-provider";
 import {
   DepotTable,
   FaultDistributionChart,
@@ -99,7 +100,7 @@ function SignalViewer() {
   );
 }
 
-export default function DashboardPage() {
+function DashboardPageContent() {
   return (
     <>
       <Nav />
@@ -152,5 +153,15 @@ export default function DashboardPage() {
       </footer>
       </main>
     </>
+  );
+}
+
+/** Signed-out visitors are bounced to /login; a role that may not open this
+ *  page is sent to its own home. Usability only -- see auth-provider.tsx. */
+export default function DashboardPage() {
+  return (
+    <RequireAuth>
+      <DashboardPageContent />
+    </RequireAuth>
   );
 }

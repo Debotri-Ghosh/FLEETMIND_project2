@@ -19,21 +19,36 @@ import {
   YAxis,
 } from "recharts";
 import { ApiError, api } from "@/lib/api";
+import { useAuth } from "./auth-provider";
 
 const NAV_LINKS = [
-  { href: "/", label: "Dashboard" },
-  { href: "/customer", label: "Customer" },
-  { href: "/operator", label: "Site Operations" },
+  { href: "/", label: "Dashboard", roles: ["customer", "operator", "admin"] },
+  { href: "/customer", label: "Customer", roles: ["customer", "admin"] },
+  { href: "/operator", label: "Site Operations", roles: ["operator", "admin"] },
 ] as const;
+
+const ROLE_LABEL: Record<string, string> = {
+  customer: "Customer",
+  operator: "Site operator",
+  admin: "Admin",
+};
 
 export function Nav() {
   const pathname = usePathname();
+  const { user, signOut } = useAuth();
+
+  // Hiding a link the caller may not use is a courtesy, not a control: the
+  // API refuses the underlying requests regardless of what this renders.
+  const links = NAV_LINKS.filter(
+    (link) => user && (link.roles as readonly string[]).includes(user.role)
+  );
+
   return (
     <nav className="border-b bg-white">
       <div className="mx-auto flex max-w-6xl items-center gap-6 px-8 py-3">
         <span className="font-bold">FleetMind</span>
         <div className="flex gap-4 text-sm">
-          {NAV_LINKS.map((link) => (
+          {links.map((link) => (
             <Link
               key={link.href}
               href={link.href}
@@ -47,6 +62,27 @@ export function Nav() {
             </Link>
           ))}
         </div>
+
+        {user && (
+          <div className="ml-auto flex items-center gap-3 text-sm">
+            <span className="text-slate-600">
+              <span className="font-medium">{ROLE_LABEL[user.role] ?? user.role}</span>
+              {user.site_name && (
+                <span className="text-slate-500"> · {user.site_name}</span>
+              )}
+              {user.customer_name && (
+                <span className="text-slate-500"> · {user.customer_name}</span>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={signOut}
+              className="rounded border border-slate-300 px-2 py-1 text-xs font-medium hover:bg-slate-100"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
       </div>
     </nav>
   );

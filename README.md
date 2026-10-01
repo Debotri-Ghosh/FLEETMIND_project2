@@ -121,7 +121,55 @@ python -m fleetmind.agents.run --all-pending
 
 # Bridge agent_decisions into Equipment.status + auto-file AI service requests
 python -m fleetmind.agents.sync_equipment_status          # --dry-run to preview
+
+# Demo logins (run AFTER seed_product_tables.py -- the role scopes point at
+# customer and site rows, so those have to exist first)
+python -m fleetmind.db.seed_users
 ```
+
+### Signing in
+
+Every endpoint except `POST /auth/login` and the `GET /livez` liveness probe
+requires a bearer token, including `/health`. `POST /auth/login` returns one.
+
+Three roles, each with a different scope, enforced **at the API layer** rather
+than by hiding things in the UI:
+
+| Role | Sees |
+|---|---|
+| `customer` | only its own equipment and service requests, at any site |
+| `operator` | only its own site's equipment, queue and dispatches |
+| `admin` | everything, including the replay controls |
+
+Seeded demo logins — these passwords are published on purpose so a reviewer
+can sign in as each role and check that the restrictions are real. The two
+operators sit at **different** sites so the site scoping is demonstrable:
+
+| Email | Password | Role |
+|---|---|---|
+| `admin@fleetmind.example.com` | `admin-demo-2026` | admin |
+| `operator.a@fleetmind.example.com` | `operator-demo-2026` | operator — Plant A (0 HP) |
+| `operator.c@fleetmind.example.com` | `operator-demo-2026` | operator — Plant C (2 HP) |
+| `customer.acme@fleetmind.example.com` | `customer-demo-2026` | customer — Acme Manufacturing |
+| `customer.northwind@fleetmind.example.com` | `customer-demo-2026` | customer — Northwind Steel |
+
+```bash
+TOKEN=$(curl -s -X POST localhost:8000/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"operator.a@fleetmind.example.com","password":"operator-demo-2026"}' \
+  | python -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+
+curl -s localhost:8000/equipment -H "Authorization: Bearer $TOKEN"   # 2 machines
+curl -s localhost:8000/equipment                                     # 401
+curl -s localhost:8000/replay/status -H "Authorization: Bearer $TOKEN"  # 403, admin only
+```
+
+The guarantee worth checking: a caller's scope is read from their user row and
+applied *before* any query parameter they send, so `?customer_id=…` or
+`?depot_id=…` can only ever narrow a result set, never widen it.
+`backend/tests/test_auth.py` asserts this directly, and one of its tests walks
+the application's own route table so a router added later without a guard
+fails the suite instead of shipping open.
 
 ### Optional: the LLM write-up layer
 
@@ -197,6 +245,7 @@ backend/
     agents/             # LangGraph Monitor->Diagnostic->Risk->Maintenance chain,
                          #   + sync_equipment_status (the ML -> product bridge)
                          #   + tools.py / llm.py (the optional Claude write-up layer)
+    auth/               # bcrypt passwords, JWT issue/decode, role + row scoping
   alembic/              # migrations (0001 core schema, 0002 product-layer schema)
   tests/                # pytest suite (sqlite-backed)
 frontend/
@@ -224,6 +273,16 @@ docker-compose.yml      # postgres + api + migrate + frontend + adminer
   cannot change a risk score, an urgency or an equipment status — every one of
   those still comes from rule-based code — and the grounding check that backs
   this up is a blunt numeric scan, not a proof.
+- The frontend keeps its JWT in `localStorage`, not an httpOnly cookie, so it
+  is readable by injected script. The API is a separate origin, so a cookie
+  would need `SameSite=None; Secure`, credentialed CORS and TLS in front of
+  both — more moving parts than a local demo warrants. It does not weaken what
+  this layer demonstrates: every restriction is enforced server-side, so a
+  stolen or hand-edited token still cannot read another tenant's rows.
+  Switching to cookies is a deployment change, not a redesign.
+- Demo passwords are weak and published above, deliberately. There is no
+  signup, password reset, rate limiting or refresh-token rotation — all of
+  which a real deployment needs and none of which this demo has.
 
 ## Dataset
 

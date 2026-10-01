@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
 import { api } from "@/lib/api";
+import { RequireAuth, useAuth } from "../auth-provider";
 import {
   ErrorRetry,
   EvidencePanel,
@@ -332,9 +333,19 @@ function WorkOrderQueue() {
   );
 }
 
-export default function OperatorPage() {
-  const depots = useQuery({ queryKey: ["depots"], queryFn: api.depots });
+function OperatorPageContent() {
+  const { user } = useAuth();
+  const allDepots = useQuery({ queryKey: ["depots"], queryFn: api.depots });
   const [depotId, setDepotId] = useState<number | null>(null);
+
+  // /depots is readable by every signed-in role, but an operator is scoped to
+  // one site -- offering them the other three would just hand back empty
+  // tables. Narrow the filter to what the API will actually return for them.
+  const depots =
+    user?.role === "operator"
+      ? (allDepots.data ?? []).filter((d) => d.id === user.depot_id)
+      : (allDepots.data ?? []);
+  const isAdmin = user?.role === "admin";
 
   return (
     <>
@@ -348,10 +359,15 @@ export default function OperatorPage() {
           </p>
         </header>
 
-        <section className="rounded-xl bg-white p-6 shadow">
-          <h2 className="mb-4 text-xl font-semibold">Simulated Sensor Feed</h2>
-          <ReplayControls />
-        </section>
+        {/* Replay rewrites predictions, decisions and equipment status across
+            every site, so the API restricts it to admins. Rendering the panel
+            for an operator would only produce a 403 on every poll. */}
+        {isAdmin && (
+          <section className="rounded-xl bg-white p-6 shadow">
+            <h2 className="mb-4 text-xl font-semibold">Simulated Sensor Feed</h2>
+            <ReplayControls />
+          </section>
+        )}
 
         <section className="rounded-xl bg-white p-6 shadow">
           <div className="mb-4 flex items-center justify-between">
@@ -365,8 +381,10 @@ export default function OperatorPage() {
                   setDepotId(e.target.value === "" ? null : Number(e.target.value))
                 }
               >
-                <option value="">All sites</option>
-                {depots.data?.map((d) => (
+                <option value="">
+                  {user?.role === "operator" ? "My site" : "All sites"}
+                </option>
+                {depots.map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.name} ({d.load_hp}HP)
                   </option>
@@ -400,5 +418,15 @@ export default function OperatorPage() {
         </section>
       </main>
     </>
+  );
+}
+
+/** Signed-out visitors are bounced to /login; a role that may not open this
+ *  page is sent to its own home. Usability only -- see auth-provider.tsx. */
+export default function OperatorPage() {
+  return (
+    <RequireAuth>
+      <OperatorPageContent />
+    </RequireAuth>
   );
 }

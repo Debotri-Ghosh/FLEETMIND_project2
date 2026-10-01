@@ -11,6 +11,8 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
 
 from fleetmind.api.main import create_app  # noqa: E402
+from fleetmind.auth.passwords import hash_password  # noqa: E402
+from fleetmind.auth.tokens import create_access_token  # noqa: E402
 from fleetmind.db import session as db_session  # noqa: E402
 from fleetmind.db.base import Base  # noqa: E402
 from fleetmind.db.models import (  # noqa: E402
@@ -22,8 +24,43 @@ from fleetmind.db.models import (  # noqa: E402
     ModelPrediction,
     SignalWindow,
     Technician,
+    User,
     seed_depots_payload,
 )
+
+# One bcrypt hash reused across every fixture user. Hashing is deliberately
+# slow, and paying that cost once per *session* rather than once per fixture
+# keeps the suite fast without weakening anything -- the password-handling
+# tests hash for real.
+TEST_PASSWORD = "test-password"
+
+
+@pytest.fixture(scope="session")
+def test_password_hash() -> str:
+    return hash_password(TEST_PASSWORD)
+
+
+def make_user(session, test_password_hash, **kwargs) -> User:
+    user = User(hashed_password=test_password_hash, **kwargs)
+    session.add(user)
+    session.commit()
+    return user
+
+
+def authorize(test_client, user: User) -> None:
+    """Attach a real signed token for `user` to every request the client makes.
+
+    A real token, not a dependency override: overriding get_current_user would
+    skip the very code that decodes, verifies and re-checks the account, which
+    is the part most worth testing.
+    """
+    token = create_access_token(
+        user_id=user.id,
+        role=user.role,
+        depot_id=user.depot_id,
+        customer_id=user.customer_id,
+    )
+    test_client.headers["Authorization"] = f"Bearer {token}"
 
 
 @pytest.fixture()
@@ -73,7 +110,30 @@ def seeded_session(db_engine):
 
 
 @pytest.fixture()
-def client(db_engine, seeded_session):
+def client(db_engine, seeded_session, test_password_hash):
+    """Admin-authenticated client.
+
+    Every endpoint now requires a token, so the pre-auth tests authenticate as
+    admin: they are about endpoint behaviour, not about the access rules,
+    which tests/test_auth.py covers separately with each role.
+    """
+    app = create_app()
+
+    def override_get_session():
+        yield seeded_session
+
+    app.dependency_overrides[db_session.get_session] = override_get_session
+    admin = make_user(
+        seeded_session, test_password_hash, email="admin@fleetmind.example.com", role="admin"
+    )
+    with TestClient(app) as c:
+        authorize(c, admin)
+        yield c
+
+
+@pytest.fixture()
+def anon_client(db_engine, seeded_session):
+    """Deliberately unauthenticated, for proving routes are actually closed."""
     app = create_app()
 
     def override_get_session():
@@ -179,13 +239,91 @@ def product_session(db_engine):
     session.close()
 
 
-@pytest.fixture()
-def product_client(db_engine, product_session):
+def _product_app(product_session):
     app = create_app()
 
     def override_get_session():
         yield product_session
 
     app.dependency_overrides[db_session.get_session] = override_get_session
-    with TestClient(app) as c:
+    return app
+
+
+@pytest.fixture()
+def product_client(db_engine, product_session, test_password_hash):
+    """Admin-authenticated product client (pre-auth tests keep their meaning)."""
+    admin = make_user(
+        product_session, test_password_hash, email="admin@fleetmind.example.com", role="admin"
+    )
+    with TestClient(_product_app(product_session)) as c:
+        authorize(c, admin)
+        yield c
+
+
+@pytest.fixture()
+def customer_client(db_engine, product_session, test_password_hash):
+    """Signed in as the customer who owns equipment 1-3 (customer_id=1)."""
+    user = make_user(
+        product_session,
+        test_password_hash,
+        email="customer@fleetmind.example.com",
+        role="customer",
+        customer_id=1,
+    )
+    with TestClient(_product_app(product_session)) as c:
+        authorize(c, user)
+        yield c
+
+
+@pytest.fixture()
+def other_customer_client(db_engine, product_session, test_password_hash):
+    """Signed in as a *different* customer, who owns nothing in the fixture.
+
+    This is the one that makes the customer scoping provable: everything in
+    product_session belongs to customer 1, so this caller must see none of it.
+    """
+    product_session.add(
+        Customer(id=2, name="Northwind Steel", email="ops@northwind.test", company="Northwind")
+    )
+    product_session.commit()
+    user = make_user(
+        product_session,
+        test_password_hash,
+        email="other@fleetmind.example.com",
+        role="customer",
+        customer_id=2,
+    )
+    with TestClient(_product_app(product_session)) as c:
+        authorize(c, user)
+        yield c
+
+
+@pytest.fixture()
+def operator_client(db_engine, product_session, test_password_hash):
+    """Operator at site 1, where all the fixture's equipment lives."""
+    user = make_user(
+        product_session,
+        test_password_hash,
+        email="op1@fleetmind.example.com",
+        role="operator",
+        depot_id=1,
+        technician_id=1,
+    )
+    with TestClient(_product_app(product_session)) as c:
+        authorize(c, user)
+        yield c
+
+
+@pytest.fixture()
+def other_operator_client(db_engine, product_session, test_password_hash):
+    """Operator at site 3 — a site with none of the fixture's equipment."""
+    user = make_user(
+        product_session,
+        test_password_hash,
+        email="op3@fleetmind.example.com",
+        role="operator",
+        depot_id=3,
+    )
+    with TestClient(_product_app(product_session)) as c:
+        authorize(c, user)
         yield c

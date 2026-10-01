@@ -15,12 +15,26 @@ from fleetmind.api.schemas import (
     ModelPerformance,
     ProductSummary,
 )
+from fleetmind.auth.deps import (
+    get_current_user,
+    require_any_role,
+    scope_by_customer,
+    scope_by_depot,
+)
 from fleetmind.db import session as db_session
-from fleetmind.db.models import Depot, Equipment, ServiceRequest, SignalWindow, WorkOrder
+from fleetmind.db.models import (
+    Depot,
+    Equipment,
+    ServiceRequest,
+    SignalWindow,
+    User,
+    WorkOrder,
+)
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/stats", tags=["stats"])
+# Any signed-in role may read the research/ML layer; nobody anonymous may.
+router = APIRouter(prefix="/stats", tags=["stats"], dependencies=[Depends(require_any_role)])
 
 MLRUNS = Path("mlruns")
 _OPEN_REQUEST_STATUSES = ("reported", "diagnosed", "dispatched", "in_progress")
@@ -103,37 +117,78 @@ def model_performance(db: Session = Depends(db_session.get_session)):
 
 
 @router.get("/product-summary", response_model=ProductSummary)
-def product_summary(db: Session = Depends(db_session.get_session)):
+def product_summary(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(db_session.get_session),
+):
+    """Operational KPIs, counted within the caller's own scope.
+
+    Unlike /stats/fault-distribution and /stats/model-performance -- which are
+    research results over the public CWRU archive and are the same number for
+    everyone -- these count live equipment and open requests. An operator
+    scoped to one site must not read a figure that includes the other three,
+    or the dashboard would quietly undo the scoping the rest of the API
+    enforces.
+    """
+
+    def scoped(query, equipment_scope: bool):
+        """Apply the caller's scope to a query over Equipment or ServiceRequest."""
+        model = Equipment if equipment_scope else ServiceRequest
+        for condition in (
+            scope_by_customer(user, model.customer_id),
+            scope_by_depot(user, model.depot_id),
+        ):
+            if condition is not None:
+                query = query.where(condition)
+        return query
+
     equipment_by_status: dict[str, int] = {
         status: n
         for status, n in db.execute(
-            select(Equipment.status, func.count()).group_by(Equipment.status)
+            scoped(select(Equipment.status, func.count()), True).group_by(Equipment.status)
         ).all()
     }
 
     open_requests_by_priority: dict[str, int] = {
         priority: n
         for priority, n in db.execute(
-            select(ServiceRequest.priority, func.count())
-            .where(ServiceRequest.status.in_(_OPEN_REQUEST_STATUSES))
-            .group_by(ServiceRequest.priority)
+            scoped(
+                select(ServiceRequest.priority, func.count()).where(
+                    ServiceRequest.status.in_(_OPEN_REQUEST_STATUSES)
+                ),
+                False,
+            ).group_by(ServiceRequest.priority)
         ).all()
     }
 
     ai_flagged_open = db.execute(
-        select(func.count())
-        .select_from(ServiceRequest)
-        .where(
-            ServiceRequest.status.in_(_OPEN_REQUEST_STATUSES),
-            ServiceRequest.agent_decision_id.is_not(None),
+        scoped(
+            select(func.count())
+            .select_from(ServiceRequest)
+            .where(
+                ServiceRequest.status.in_(_OPEN_REQUEST_STATUSES),
+                ServiceRequest.agent_decision_id.is_not(None),
+            ),
+            False,
         )
     ).scalar_one()
 
-    active_work_orders = db.execute(
+    # Work orders carry no scope of their own; it is reached through the
+    # service request, which is the only place it is actually true.
+    work_order_query = (
         select(func.count())
         .select_from(WorkOrder)
         .where(WorkOrder.status.in_(_OPEN_WORK_ORDER_STATUSES))
-    ).scalar_one()
+    )
+    for condition in (
+        scope_by_customer(user, ServiceRequest.customer_id),
+        scope_by_depot(user, ServiceRequest.depot_id),
+    ):
+        if condition is not None:
+            work_order_query = work_order_query.join(
+                ServiceRequest, ServiceRequest.id == WorkOrder.service_request_id
+            ).where(condition)
+    active_work_orders = db.execute(work_order_query).scalar_one()
 
     return ProductSummary(
         equipment_by_status=equipment_by_status,

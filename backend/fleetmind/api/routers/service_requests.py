@@ -16,6 +16,15 @@ from fleetmind.api.schemas import (
     ServiceRequestNarrative,
 )
 from fleetmind.api.schemas import ServiceRequest as ServiceRequestSchema
+from fleetmind.auth.deps import (
+    ROLE_CUSTOMER,
+    assert_may_read,
+    get_current_user,
+    may_read_depot,
+    require_operator,
+    scope_by_customer,
+    scope_by_depot,
+)
 from fleetmind.db import session as db_session
 from fleetmind.db.models import (
     AgentDecision,
@@ -26,6 +35,7 @@ from fleetmind.db.models import (
     LLMNarrative,
     ModelPrediction,
     SignalWindow,
+    User,
 )
 from fleetmind.db.models import ServiceRequest as ServiceRequestModel
 from fleetmind.ml.bearing_freq import (
@@ -74,9 +84,21 @@ def list_service_requests(
     status: str | None = None,
     ai_flagged: bool | None = None,
     limit: int = Query(default=100, ge=1, le=500),
+    user: User = Depends(get_current_user),
     db: Session = Depends(db_session.get_session),
 ):
     query = _select_with_agent_context().order_by(ServiceRequestModel.id.desc()).limit(limit)
+
+    # Applied before the client's own filters and derived from the caller's
+    # user row, so ?customer_id= / ?depot_id= can only ever narrow a result
+    # set, never widen it past the caller's scope.
+    for condition in (
+        scope_by_customer(user, ServiceRequestModel.customer_id),
+        scope_by_depot(user, ServiceRequestModel.depot_id),
+    ):
+        if condition is not None:
+            query = query.where(condition)
+
     if customer_id is not None:
         query = query.where(ServiceRequestModel.customer_id == customer_id)
     if depot_id is not None:
@@ -100,6 +122,20 @@ def get_service_request(request_id: int, db: Session = Depends(db_session.get_se
     if row is None:
         raise HTTPException(status_code=404, detail="service request not found")
     return _with_agent_context(row)
+
+
+def _assert_may_read_request(db: Session, user: User, request_id: int) -> ServiceRequestModel:
+    """Fetch a request the caller is actually entitled to, or 404.
+
+    Every per-request endpoint goes through here rather than trusting the id
+    in the path, because an id is guessable and the evidence package carries
+    the machine's raw vibration signal.
+    """
+    request = db.get(ServiceRequestModel, request_id)
+    if request is None:
+        raise HTTPException(status_code=404, detail=f"service request {request_id} not found")
+    assert_may_read(user, customer_id=request.customer_id, depot_id=request.depot_id)
+    return request
 
 
 def _evidence_chain(db: Session, request_id: int):
@@ -174,7 +210,11 @@ def _evidence_context(db: Session, request_id: int) -> EvidenceContext:
 
 
 @router.get("/{request_id}/evidence", response_model=EvidencePackage)
-def get_evidence(request_id: int, db: Session = Depends(db_session.get_session)):
+def get_evidence(
+    request_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(db_session.get_session),
+):
     """Inspectable evidence behind an AI-filed request.
 
     Walks the chain the decision was actually made through:
@@ -187,6 +227,7 @@ def get_evidence(request_id: int, db: Session = Depends(db_session.get_session))
     Same function, same input, same numbers -- but it is a recomputation, not
     a read-back, and is labelled as such in the UI.
     """
+    _assert_may_read_request(db, user, request_id)
     service_request, decision, prediction, window, experiment, depot = _evidence_chain(
         db, request_id
     )
@@ -236,12 +277,17 @@ def _narrative_response(row: LLMNarrative, cached: bool) -> ServiceRequestNarrat
 
 
 @router.get("/{request_id}/narrative", response_model=ServiceRequestNarrative)
-def get_narrative(request_id: int, db: Session = Depends(db_session.get_session)):
+def get_narrative(
+    request_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(db_session.get_session),
+):
     """Return the cached narrative, if one has been generated.
 
     Read-only and free: a 404 here means "not generated yet", not an error.
     Generation costs a real API call and is therefore an explicit POST.
     """
+    _assert_may_read_request(db, user, request_id)
     row = db.execute(
         select(LLMNarrative).where(LLMNarrative.service_request_id == request_id)
     ).scalar_one_or_none()
@@ -260,6 +306,9 @@ def create_narrative(
         default=False,
         description="Regenerate even if a narrative is cached. Costs another API call.",
     ),
+    # Generating spends money, so it is operator/admin only -- a customer can
+    # read a write-up about their own machine but cannot run up a bill.
+    user: User = Depends(require_operator),
     db: Session = Depends(db_session.get_session),
 ):
     """Generate (or return the cached) Claude narrative for an AI-filed request.
@@ -268,6 +317,7 @@ def create_narrative(
     idempotent in cost, even though it is idempotent in effect. The cached
     path is returned without calling the API at all unless `force=true`.
     """
+    _assert_may_read_request(db, user, request_id)
     existing = db.execute(
         select(LLMNarrative).where(LLMNarrative.service_request_id == request_id)
     ).scalar_one_or_none()
@@ -309,8 +359,18 @@ def create_narrative(
 
 @router.post("", response_model=ServiceRequestSchema, status_code=201)
 def create_service_request(
-    payload: ServiceRequestCreate, db: Session = Depends(db_session.get_session)
+    payload: ServiceRequestCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(db_session.get_session),
 ):
+    # A customer may only file on its own behalf. 403 rather than silently
+    # rewriting customer_id to theirs: a client sending someone else's id has
+    # a bug (or worse) and should be told, not quietly corrected.
+    if user.role == ROLE_CUSTOMER and payload.customer_id != user.customer_id:
+        raise HTTPException(
+            status_code=403,
+            detail="a customer may only file service requests for itself",
+        )
     if db.get(Customer, payload.customer_id) is None:
         raise HTTPException(status_code=404, detail=f"customer {payload.customer_id} not found")
     if db.get(Depot, payload.depot_id) is None:
@@ -334,6 +394,12 @@ def create_service_request(
                     f"{equipment.depot_id}, not depot {payload.depot_id}"
                 ),
             )
+
+    # Operators triage; they must not open a request at another site. Only the
+    # site is checked here -- a customer legitimately files against whichever
+    # site its machine sits at, and the customer_id was already checked above.
+    if not may_read_depot(user, payload.depot_id):
+        raise HTTPException(status_code=404, detail=f"depot {payload.depot_id} not found")
 
     result = db.execute(insert(ServiceRequestModel).values(**payload.model_dump()))
     db.commit()

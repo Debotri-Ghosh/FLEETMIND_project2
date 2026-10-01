@@ -1,8 +1,27 @@
+import { getToken } from "./session";
+
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
+/** Every call carries the session token when there is one.
+ *
+ * Attaching it here rather than at each call site means a new endpoint cannot
+ * accidentally be added unauthenticated -- and, since the API rejects a
+ * missing or wrong token itself, a client that forgot it simply gets a 401
+ * rather than quietly seeing someone else's data. */
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token = getToken();
+  return {
+    ...(extra ?? {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
 async function getJson<T>(path: string): Promise<T> {
-  const resp = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+  const resp = await fetch(`${API_BASE}${path}`, {
+    cache: "no-store",
+    headers: authHeaders(),
+  });
   if (!resp.ok) {
     const detail = await extractDetail(resp);
     throw new ApiError(detail ?? `API ${path} failed: ${resp.status}`, resp.status);
@@ -38,7 +57,7 @@ async function sendJson<T>(
 ): Promise<T> {
   const resp = await fetch(`${API_BASE}${path}`, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
@@ -58,7 +77,15 @@ function toQueryString(params: Record<string, string | number | boolean | undefi
 }
 
 export const api = {
+  /** Unauthenticated: proves the API process is up, nothing more. */
+  livez: () => getJson<{ status: string }>("/livez"),
   health: () => getJson<import("./types").Health>("/health"),
+  login: (email: string, password: string) =>
+    sendJson<import("./types").TokenResponse>("POST", "/auth/login", {
+      email,
+      password,
+    }),
+  me: () => getJson<import("./types").CurrentUser>("/auth/me"),
   depots: () => getJson<import("./types").Depot[]>("/depots"),
   experiments: (params?: { fault_type?: string; depot_id?: number }) => {
     const qs = new URLSearchParams();

@@ -31,7 +31,11 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      # /livez, not /health: every other route now requires a bearer token
+      # (including /health, which reports database state), and a container
+      # healthcheck has no credentials. /livez proves only that the process
+      # is answering and discloses nothing.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/livez')\""]
       interval: 10s
       timeout: 5s
       retries: 5

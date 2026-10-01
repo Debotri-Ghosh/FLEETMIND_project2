@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from fleetmind.api.routers import (
+    auth,
     customers,
     depots,
     equipment,
@@ -17,6 +18,7 @@ from fleetmind.api.routers import (
     windows,
     work_orders,
 )
+from fleetmind.auth.deps import require_any_role
 from fleetmind.core.config import get_settings
 from fleetmind.db import session as db_session
 from fleetmind.db.models import seed_depots_payload
@@ -38,6 +40,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    app.include_router(auth.router)
     app.include_router(depots.router)
     app.include_router(experiments.router)
     app.include_router(windows.router)
@@ -55,7 +58,19 @@ def create_app() -> FastAPI:
         # two workers end up racing over the same windows.
         await replay_worker.stop()
 
-    @app.get("/health", tags=["system"])
+    @app.get("/livez", tags=["system"])
+    def livez():
+        """Unauthenticated liveness probe.
+
+        /health reports database connectivity and is therefore behind auth
+        like everything else (the project owner chose to protect it). A
+        container healthcheck has no credentials, so it needs a route that
+        proves only "this process is answering" and discloses nothing --
+        deliberately no DB access and no version string.
+        """
+        return {"status": "alive"}
+
+    @app.get("/health", tags=["system"], dependencies=[Depends(require_any_role)])
     def health(db: Session = Depends(db_session.get_session)):
         # Lightweight connectivity probe; a failure raises and surfaces as a 500.
         db.connection()

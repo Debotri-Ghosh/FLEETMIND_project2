@@ -11,10 +11,32 @@ from sqlalchemy.orm import Session
 
 from fleetmind.api.schemas import WorkOrder as WorkOrderSchema
 from fleetmind.api.schemas import WorkOrderCreate, WorkOrderStatusUpdate
+from fleetmind.auth.deps import get_current_user, require_operator, scope_by_depot
 from fleetmind.db import session as db_session
-from fleetmind.db.models import ServiceRequest, Technician, WorkOrder
+from fleetmind.db.models import ServiceRequest, Technician, User, WorkOrder
 
-router = APIRouter(prefix="/work-orders", tags=["work-orders"])
+# Dispatch is an operator function end to end. A customer may see that their
+# request was dispatched (via /service-requests) but has no business reading
+# or writing the technician assignment behind it.
+router = APIRouter(
+    prefix="/work-orders",
+    tags=["work-orders"],
+    dependencies=[Depends(require_operator)],
+)
+
+
+def _scoped_to_callers_site(query, user: User):
+    """Restrict work orders to those whose service request is at the caller's site.
+
+    Work orders carry no depot_id of their own, so the scope has to be reached
+    through the service request -- which is also the only place it is true.
+    """
+    condition = scope_by_depot(user, ServiceRequest.depot_id)
+    if condition is None:
+        return query
+    return query.join(ServiceRequest, ServiceRequest.id == WorkOrder.service_request_id).where(
+        condition
+    )
 
 
 @router.get("", response_model=list[WorkOrderSchema])
@@ -23,9 +45,12 @@ def list_work_orders(
     status: str | None = None,
     service_request_id: int | None = None,
     limit: int = Query(default=100, ge=1, le=500),
+    user: User = Depends(get_current_user),
     db: Session = Depends(db_session.get_session),
 ):
-    query = select(WorkOrder).order_by(WorkOrder.id.desc()).limit(limit)
+    query = _scoped_to_callers_site(
+        select(WorkOrder).order_by(WorkOrder.id.desc()).limit(limit), user
+    )
     if technician_id is not None:
         query = query.where(WorkOrder.technician_id == technician_id)
     if status is not None:
@@ -36,18 +61,40 @@ def list_work_orders(
 
 
 @router.get("/{work_order_id}", response_model=WorkOrderSchema)
-def get_work_order(work_order_id: int, db: Session = Depends(db_session.get_session)):
+def get_work_order(
+    work_order_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(db_session.get_session),
+):
     work_order = db.get(WorkOrder, work_order_id)
     if work_order is None:
         raise HTTPException(status_code=404, detail="work order not found")
+    _assert_same_site(db, user, work_order.service_request_id)
     return work_order
 
 
+def _assert_same_site(db: Session, user: User, service_request_id: int) -> None:
+    """404 for a work order at another site -- see auth/deps.assert_may_read."""
+    request = db.get(ServiceRequest, service_request_id)
+    if request is None:
+        raise HTTPException(status_code=404, detail="work order not found")
+    if scope_by_depot(user, ServiceRequest.depot_id) is not None and (
+        request.depot_id != user.depot_id
+    ):
+        raise HTTPException(status_code=404, detail="work order not found")
+
+
 @router.post("", response_model=WorkOrderSchema, status_code=201)
-def create_work_order(payload: WorkOrderCreate, db: Session = Depends(db_session.get_session)):
+def create_work_order(
+    payload: WorkOrderCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(db_session.get_session),
+):
     service_request = db.get(ServiceRequest, payload.service_request_id)
     if service_request is None:
         raise HTTPException(status_code=404, detail="service request not found")
+    # An operator may only dispatch against their own site's queue.
+    _assert_same_site(db, user, payload.service_request_id)
     if db.get(Technician, payload.technician_id) is None:
         raise HTTPException(status_code=404, detail=f"technician {payload.technician_id} not found")
 
@@ -79,6 +126,7 @@ def create_work_order(payload: WorkOrderCreate, db: Session = Depends(db_session
 def update_work_order_status(
     work_order_id: int,
     payload: WorkOrderStatusUpdate,
+    user: User = Depends(get_current_user),
     db: Session = Depends(db_session.get_session),
 ):
     # No transition-graph validation here: any status -> any other status is
@@ -91,6 +139,7 @@ def update_work_order_status(
     work_order = db.get(WorkOrder, work_order_id)
     if work_order is None:
         raise HTTPException(status_code=404, detail="work order not found")
+    _assert_same_site(db, user, work_order.service_request_id)
 
     values: dict = {"status": payload.status}
     now = datetime.now(UTC)

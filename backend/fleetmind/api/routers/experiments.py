@@ -5,10 +5,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fleetmind.api.schemas import Experiment as ExperimentSchema
+from fleetmind.auth.deps import require_any_role
 from fleetmind.db import session as db_session
 from fleetmind.db.models import Experiment as ExperimentModel
 
-router = APIRouter(prefix="/experiments", tags=["experiments"])
+# Any signed-in role may read the research/ML layer; nobody anonymous may.
+router = APIRouter(
+    prefix="/experiments", tags=["experiments"], dependencies=[Depends(require_any_role)]
+)
 
 
 @router.get("", response_model=list[ExperimentSchema])

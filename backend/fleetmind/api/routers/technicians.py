@@ -5,10 +5,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fleetmind.api.schemas import Technician as TechnicianSchema
+from fleetmind.auth.deps import require_operator
 from fleetmind.db import session as db_session
 from fleetmind.db.models import Technician as TechnicianModel
 
-router = APIRouter(prefix="/technicians", tags=["technicians"])
+# Technician roster is dispatch data: operators and admins only.
+router = APIRouter(
+    prefix="/technicians", tags=["technicians"], dependencies=[Depends(require_operator)]
+)
 
 
 @router.get("", response_model=list[TechnicianSchema])

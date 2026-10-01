@@ -246,3 +246,25 @@ export interface ServiceRequestNarrative {
   created_at: string;
   cached: boolean;
 }
+
+export type Role = "customer" | "operator" | "admin";
+
+export interface CurrentUser {
+  id: number;
+  email: string;
+  full_name: string | null;
+  role: Role;
+  customer_id: number | null;
+  customer_name: string | null;
+  /** Set for operators: the one site they may see. */
+  depot_id: number | null;
+  site_name: string | null;
+  technician_id: number | null;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: "bearer";
+  expires_in_minutes: number;
+  user: CurrentUser;
+}

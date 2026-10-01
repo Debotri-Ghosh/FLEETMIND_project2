@@ -5,10 +5,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fleetmind.api.schemas import WindowDetail, WindowSummary
+from fleetmind.auth.deps import require_any_role
 from fleetmind.db import session as db_session
 from fleetmind.db.models import SignalWindow
 
-router = APIRouter(tags=["windows"])
+# Any signed-in role may read the research/ML layer; nobody anonymous may.
+router = APIRouter(tags=["windows"], dependencies=[Depends(require_any_role)])
 
 
 @router.get("/experiments/{experiment_id}/windows", response_model=list[WindowSummary])

@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     Float,
@@ -236,6 +237,60 @@ class ServiceRequest(Base):
     )
 
 
+class User(Base):
+    """A login, bound to the thing it is allowed to act on behalf of.
+
+    Three roles, and each carries a different scope:
+
+      customer  -- sees only its own equipment and service requests. Must have
+                   `customer_id`.
+      operator  -- sees only its own site's queue. Must have `depot_id`.
+                   `technician_id` optionally links the login to the
+                   technician row it dispatches as.
+      admin     -- sees everything; carries neither scope.
+
+    The scope lives here rather than being passed by the client, because the
+    whole point is that a customer cannot read another customer's data by
+    changing a query parameter. The API re-derives the filter from this row on
+    every request (see auth/deps.py).
+
+    The CHECK constraint makes the role/scope pairing a database invariant, so
+    a half-configured login -- an operator with no site -- cannot be inserted
+    by a seed script or a migration and then silently behave like an admin.
+    """
+
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('customer', 'operator', 'admin')",
+            name="ck_users_role",
+        ),
+        CheckConstraint(
+            "(role = 'customer' AND customer_id IS NOT NULL AND depot_id IS NULL) "
+            "OR (role = 'operator' AND depot_id IS NOT NULL AND customer_id IS NULL) "
+            "OR (role = 'admin' AND customer_id IS NULL AND depot_id IS NULL)",
+            name="ck_users_role_scope",
+        ),
+        Index("idx_users_role", "role"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    hashed_password: Mapped[str] = mapped_column(Text, nullable=False)
+    full_name: Mapped[str | None] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
+    depot_id: Mapped[int | None] = mapped_column(ForeignKey("depots.id"))
+    technician_id: Mapped[int | None] = mapped_column(ForeignKey("technicians.id"))
+    # Deactivation rather than deletion: a disabled login keeps the audit trail
+    # of what it did, and is checked on every request so it takes effect
+    # immediately instead of when the token happens to expire.
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class LLMNarrative(Base):
     """A cached Claude-written write-up of one AI-filed service request.
 
@@ -352,4 +407,53 @@ def seed_depots_payload() -> list[dict[str, Any]]:
         {"name": "Plant B (CWRU 1 HP)", "load_hp": 1, "nominal_rpm": 1772},
         {"name": "Plant C (CWRU 2 HP)", "load_hp": 2, "nominal_rpm": 1750},
         {"name": "Plant D (CWRU 3 HP)", "load_hp": 3, "nominal_rpm": 1730},
+    ]
+
+
+def seed_users_payload() -> list[dict[str, Any]]:
+    """Demo logins. Passwords are plaintext here and hashed by seed_users.py.
+
+    These are deliberately weak and deliberately published in the README: this
+    is a thesis demo, and a reviewer has to be able to log in as each role to
+    check that the restrictions are real. Two operators sit at *different*
+    sites so the site scoping is actually demonstrable rather than theoretical.
+    Never reuse this file's shape for a deployment that holds real data.
+    """
+    return [
+        {
+            "email": "admin@fleetmind.example.com",
+            "password": "admin-demo-2026",
+            "full_name": "Platform Admin",
+            "role": "admin",
+        },
+        {
+            "email": "operator.a@fleetmind.example.com",
+            "password": "operator-demo-2026",
+            "full_name": "Site Operator — Plant A",
+            "role": "operator",
+            "depot_name": "Plant A (CWRU 0 HP)",
+            "technician_name": "Alice Chen",
+        },
+        {
+            "email": "operator.c@fleetmind.example.com",
+            "password": "operator-demo-2026",
+            "full_name": "Site Operator — Plant C",
+            "role": "operator",
+            "depot_name": "Plant C (CWRU 2 HP)",
+            "technician_name": "Bob Martinez",
+        },
+        {
+            "email": "customer.acme@fleetmind.example.com",
+            "password": "customer-demo-2026",
+            "full_name": "Acme Manufacturing — Maintenance Lead",
+            "role": "customer",
+            "customer_name": "Acme Manufacturing",
+        },
+        {
+            "email": "customer.northwind@fleetmind.example.com",
+            "password": "customer-demo-2026",
+            "full_name": "Northwind Steel — Plant Engineer",
+            "role": "customer",
+            "customer_name": "Northwind Steel",
+        },
     ]

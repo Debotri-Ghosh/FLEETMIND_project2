@@ -3,6 +3,7 @@
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { ApiError, api } from "@/lib/api";
+import { RequireAuth } from "../auth-provider";
 import { ErrorRetry, Nav, PriorityBadge, StatusBadge } from "../components";
 import type { ServiceRequestPriority } from "@/lib/types";
 
@@ -249,7 +250,7 @@ function ServiceRequestTracker({ customerId }: { customerId: number }) {
   );
 }
 
-export default function CustomerPage() {
+function CustomerPageContent() {
   const customers = useQuery({ queryKey: ["customers"], queryFn: api.customers });
   const [customerId, setCustomerId] = useState<number | null>(null);
   const [depotId, setDepotId] = useState<number | null>(null);
@@ -316,5 +317,15 @@ export default function CustomerPage() {
         )}
       </main>
     </>
+  );
+}
+
+/** Signed-out visitors are bounced to /login; a role that may not open this
+ *  page is sent to its own home. Usability only -- see auth-provider.tsx. */
+export default function CustomerPage() {
+  return (
+    <RequireAuth>
+      <CustomerPageContent />
+    </RequireAuth>
   );
 }

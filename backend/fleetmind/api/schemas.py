@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class Health(BaseModel):
@@ -327,3 +327,40 @@ class ServiceRequestNarrative(BaseModel):
     cached: bool = Field(
         default=True, description="False when this response generated a fresh API call."
     )
+
+
+# ── auth ───────────────────────────────────────────────────────────────
+
+Role = Literal["customer", "operator", "admin"]
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=72)
+
+
+class CurrentUser(BaseModel):
+    """Who the caller is and what they are scoped to.
+
+    The frontend uses this to decide what to render, which is a usability
+    decision only -- every restriction it reflects is enforced independently
+    on the endpoints themselves."""
+
+    id: int
+    email: str
+    full_name: str | None = None
+    role: Role
+    customer_id: int | None = None
+    customer_name: str | None = None
+    depot_id: int | None = Field(
+        default=None, description="Set for operators: the one site they may see."
+    )
+    site_name: str | None = None
+    technician_id: int | None = None
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_in_minutes: int
+    user: CurrentUser

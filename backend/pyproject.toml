@@ -16,6 +16,11 @@ dependencies = [
     "scipy>=1.13.1",
     "matplotlib>=3.9.0",
     "structlog>=24.1",
+    # Auth (fleetmind/auth). Not optional like the LLM extra: every endpoint
+    # requires a token, so the API cannot start usefully without these.
+    "pyjwt>=2.8",
+    "bcrypt>=4.1",
+    "email-validator>=2.1",
 ]
 
 [project.optional-dependencies]
