@@ -15,7 +15,13 @@ from sqlalchemy import insert, select
 from fleetmind.agents.graph import build_agent_graph
 from fleetmind.agents.state import AgentState
 from fleetmind.core.config import get_settings
-from fleetmind.db.models import AgentDecision, Experiment, ModelPrediction, SignalWindow
+from fleetmind.db.models import (
+    AgentDecision,
+    Depot,
+    Experiment,
+    ModelPrediction,
+    SignalWindow,
+)
 from fleetmind.db.session import create_db_engine, make_session_factory
 
 MLRUNS = Path("mlruns/agents")
@@ -69,11 +75,18 @@ def run_agent_pipeline(
     predicted_label: str,
     confidence: float | None,
     signal_values: list[float],
+    load_hp: int | None = None,
 ) -> AgentState:
-    """Run the full agent pipeline for one window and persist the decision."""
+    """Run the full agent pipeline for one window and persist the decision.
+
+    `load_hp` is the site's motor load (depots.load_hp) and is what the risk
+    agent's load factor is keyed by. It defaults to None (neutral factor)
+    rather than being derived from depot_id -- see LOAD_RISK_FACTOR.
+    """
     state: AgentState = {
         "window_id": window_id,
         "depot_id": depot_id,
+        "load_hp": load_hp,
         "predicted_label": predicted_label,
         "confidence": confidence,
         "signal_values": signal_values,
@@ -134,8 +147,14 @@ def main() -> None:
     app = build_agent_graph()  # build ONCE, reuse for all windows
     for i, (window_id,) in enumerate(rows, 1):
         win = session.execute(
-            select(SignalWindow.raw_values, SignalWindow.label, Experiment.depot_id)
+            select(
+                SignalWindow.raw_values,
+                SignalWindow.label,
+                Experiment.depot_id,
+                Depot.load_hp,
+            )
             .join(Experiment, Experiment.id == SignalWindow.experiment_id)
+            .join(Depot, Depot.id == Experiment.depot_id)
             .where(SignalWindow.id == window_id)
         ).one_or_none()
         if win is None:
@@ -149,6 +168,7 @@ def main() -> None:
             predicted_label=win.label,
             confidence=None,
             signal_values=list(win.raw_values or []),
+            load_hp=win.load_hp,
         )
         if i % batch_size == 0:
             session.commit()

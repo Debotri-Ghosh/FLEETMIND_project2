@@ -13,6 +13,9 @@ class AgentState(TypedDict, total=False):
     # --- inputs (set before the graph runs) ---
     window_id: int
     depot_id: int
+    # Motor load in HP for this site (depots.load_hp). Distinct from depot_id:
+    # LOAD_RISK_FACTOR is keyed by load, and site id 2 is the 1 HP site.
+    load_hp: int | None
     predicted_label: str
     confidence: float | None
     signal_values: list[float]

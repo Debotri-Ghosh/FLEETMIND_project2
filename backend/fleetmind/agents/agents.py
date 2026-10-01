@@ -19,12 +19,24 @@ FAULT_SEVERITY: dict[str, float] = {
     "OuterRace": 0.85,
 }
 
+# Keyed by MOTOR LOAD IN HP (depots.load_hp), not by site id. A heavier-loaded
+# machine carries more bearing load, so the same fault class is more urgent.
+# This was previously looked up with `depot_id`, which silently mis-scored every
+# site: site ids run 1..4 while the keys run 0..3, so the 0 HP site got the
+# 1 HP factor, the 1 HP site got the 2 HP factor, the 2 HP site got the 3 HP
+# factor, and the 3 HP site fell through to the 1.0 default entirely. Fixed in
+# Slice G by passing `load_hp` through AgentState from `depots.load_hp`.
 LOAD_RISK_FACTOR: dict[int, float] = {
     0: 0.8,
     1: 1.0,
     2: 1.15,
     3: 1.3,
 }
+
+# Used when a caller does not supply load_hp. Deliberately neutral (1.0) rather
+# than guessing load from the site id -- an unknown load must not silently
+# inflate or deflate a risk score.
+DEFAULT_LOAD_FACTOR = 1.0
 
 
 # ── Monitor ────────────────────────────────────────────────────────────
@@ -79,13 +91,17 @@ def diagnostic_agent(state: AgentState) -> AgentState:
 
 # ── Risk ───────────────────────────────────────────────────────────────
 def risk_agent(state: AgentState) -> AgentState:
-    """Compute a 0-1 risk score from fault severity + site load factor."""
+    """Compute a 0-1 risk score from fault severity + motor-load factor."""
     label = state.get("predicted_label", "Normal")
-    depot_id = state.get("depot_id", 1)
+    load_hp = state.get("load_hp")
     confidence = state.get("diagnosis_confidence", 0.5)
 
     severity = FAULT_SEVERITY.get(label, 0.5)
-    load_factor = LOAD_RISK_FACTOR.get(depot_id, 1.0)
+    load_factor = (
+        LOAD_RISK_FACTOR.get(load_hp, DEFAULT_LOAD_FACTOR)
+        if load_hp is not None
+        else DEFAULT_LOAD_FACTOR
+    )
 
     # Risk = severity * load_factor, scaled into [0, 1]
     raw = severity * load_factor
@@ -94,14 +110,12 @@ def risk_agent(state: AgentState) -> AgentState:
     factors: list[str] = []
     if label != "Normal":
         factors.append(f"Fault type: {label} (severity {severity:.2f})")
-    if depot_id >= 2:
-        # Deliberately does NOT name a horsepower figure: LOAD_RISK_FACTOR is
-        # keyed by site id, not by load_hp, so the old wording ("{depot_id}HP
-        # depot") printed the site id as if it were the motor load and was
-        # simply wrong (site id 2 is the 1 HP site). Only the text is fixed
-        # here -- the scoring itself is left exactly as-is on purpose; see
-        # CLAUDE.md for the open question about that keying.
-        factors.append(f"Higher-load site (load factor {load_factor:.2f})")
+    if load_hp is not None and load_factor > 1.0:
+        # Now that the lookup is keyed correctly, naming the real motor load is
+        # accurate again -- it is the load, not the site id, that drives it.
+        factors.append(f"Higher motor load: {load_hp} HP (load factor {load_factor:.2f})")
+    elif load_hp is not None and load_factor < 1.0:
+        factors.append(f"Lighter motor load: {load_hp} HP (load factor {load_factor:.2f})")
     if confidence < 0.6:
         factors.append("Low diagnosis confidence")
     if not factors:

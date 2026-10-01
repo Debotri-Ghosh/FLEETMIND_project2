@@ -56,10 +56,12 @@ def _run_agents_for_new_predictions(session, agent_app=None) -> int:
             ModelPrediction.predicted_label,
             ModelPrediction.confidence,
             Experiment.depot_id,
+            Depot.load_hp,
             SignalWindow.raw_values,
         )
         .join(SignalWindow, SignalWindow.id == ModelPrediction.window_id)
         .join(Experiment, Experiment.id == SignalWindow.experiment_id)
+        .join(Depot, Depot.id == Experiment.depot_id)
         .outerjoin(AgentDecision, AgentDecision.prediction_id == ModelPrediction.id)
         .where(AgentDecision.id.is_(None))
         .order_by(ModelPrediction.window_id)
@@ -77,6 +79,7 @@ def _run_agents_for_new_predictions(session, agent_app=None) -> int:
             predicted_label=row.predicted_label,
             confidence=row.confidence,
             signal_values=[float(v) for v in (row.raw_values or [])],
+            load_hp=row.load_hp,
         )
     return len(rows)
 
