@@ -3,10 +3,19 @@ name = "fleetmind"
 version = "0.1.0"
 description = "FleetMind — Federated Intelligent Predictive Maintenance for Bearing Fault Diagnosis"
 requires-python = ">=3.11"
+# Everything needed to BOOT THE API. The rule for this list is mechanical and
+# enforced by tests/test_dependencies.py: if `import fleetmind.api.main` pulls a
+# package in, it belongs here, not in an extra. `torch` and `langgraph` are here
+# for exactly that reason -- the replay router imports the worker, which imports
+# the pipeline, which imports ml.predict (torch) and agents.graph (langgraph).
+# They were previously undeclared or extra-only, so a clean `pip install -e .`
+# produced an app that could not start. Heavy, but true.
 dependencies = [
+    "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
+    "anyio>=4.4",
     "sqlalchemy>=2.0.31",
     "psycopg2-binary>=2.9.9",
     "alembic>=1.13",
@@ -15,7 +24,10 @@ dependencies = [
     "pandas>=2.2.2",
     "scipy>=1.13.1",
     "matplotlib>=3.9.0",
-    "structlog>=24.1",
+    # Agent orchestration. Imported by agents/graph.py and reached from the API.
+    "langgraph>=0.1.19",
+    # The classifier. Reached from the API via replay -> pipeline -> ml.predict.
+    "torch>=2.3.1",
     # Auth (fleetmind/auth). Not optional like the LLM extra: every endpoint
     # requires a token, so the API cannot start usefully without these.
     "pyjwt>=2.8",
@@ -24,9 +36,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Federated-learning simulation only. `torch` moved to core (the API needs it);
+# `scikit-learn` was removed because nothing imports it -- it was a dead
+# declaration, confirmed by the AST scan in tests/test_dependencies.py.
 ml = [
-    "torch>=2.3.1",
-    "scikit-learn>=1.5.0",
     "flwr>=1.9.0",
 ]
 ingest = [

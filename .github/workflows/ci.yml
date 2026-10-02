@@ -39,7 +39,10 @@ jobs:
           cache-dependency-path: backend/pyproject.toml
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        # [ml] too: tests/test_federated.py needs flwr. Everything the API
+        # itself imports is in core deps now -- see tests/test_dependencies.py,
+        # which fails if that stops being true.
+        run: pip install -e ".[ml,dev]"
 
       - name: Lint (ruff)
         run: ruff check .
