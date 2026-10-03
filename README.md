@@ -1,149 +1,275 @@
 # FleetMind
 
-**Federated Intelligent Predictive Maintenance for Bearing Fault Diagnosis** —
-M.Tech project (Debotri Ghosh, 25MML1008), jointly offered by VIT Chennai and
-LTIMindTree.
+**Federated Intelligent Predictive Maintenance for Bearing Fault Diagnosis**
 
-FleetMind learns bearing fault patterns across multiple non-IID operating
-environments (the 4 real CWRU motor load levels — 0/1/2/3 HP — act as 4
-simulated manufacturing sites), converts model predictions into maintenance decisions via a
-LangGraph multi-agent chain, and bridges those decisions into a small
-product layer (equipment, service requests, work orders) with customer and
-site-operations dashboards. No synthetic data anywhere except the documented
-TimeGAN/WaveGAN-lite augmentation step.
+M.Tech Project 2 · Debotri Ghosh (25MML1008) · VIT Chennai + LTIMindTree
+
+---
+
+## What this is
+
+A **predictive-maintenance and field-service platform for rotating industrial
+machinery**. A machine builder or service provider monitors motors, pumps, fans
+and compressors installed in its customers' factories, detects bearing faults
+early from vibration signals, backs every finding with inspectable evidence,
+and dispatches technicians to fix them.
+
+**It recommends actions; humans decide.**
+
+> This is **not** a vehicle fleet, ride-hailing or logistics product. "Fleet"
+> here means a fleet of *industrial machines*. The `depot` table and column
+> names in the schema are legacy for "manufacturing site" and are deliberately
+> retained — see
+> [`docs/adr/0001-depots-to-sites-rename.md`](docs/adr/0001-depots-to-sites-rename.md)
+> for why. Nothing a user sees says "depot".
+
+### Who it is for
+
+| Role | What they get |
+|---|---|
+| **Customer** (factory owner) | Their own equipment and service requests, across any site |
+| **Site operator** | One site's equipment board, AI-flagged queue and technician dispatch |
+| **Admin** | Everything, including the replay/automation controls |
+
+Enforced at the API, not by hiding buttons — see [Authentication](#authentication).
+
+---
+
+## What it actually does
+
+1. **Ingests** real CWRU bearing vibration recordings — 64 recordings, 4,367
+   windows of 2,048 samples at 12 kHz.
+2. **Classifies** each window as Normal / Ball / InnerRace / OuterRace with a
+   per-site 1D CNN over the window's FFT magnitude.
+3. **Reasons** over each prediction with a deterministic LangGraph chain —
+   Monitor → Diagnostic → Risk → Maintenance — producing a 0–1 risk score and an
+   urgency band.
+4. **Acts**: a HIGH or CRITICAL decision flips a real equipment row to
+   `maintenance` and auto-files a service request, which an operator dispatches
+   a technician against.
+5. **Explains**: every AI-filed request carries the triggering signal, its
+   spectrum, the corroborating bearing defect frequency, the documented ground
+   truth beside the independent prediction, and an LLM-written narrative in
+   which every number came from a deterministic tool.
+6. **Federates**: the same architecture trained across all four sites with
+   FedProx, as a non-IID federated-learning study.
+
+---
+
+## Results, stated honestly
+
+### Per-site classifier accuracy: **62.7 – 72.5%**
+
+Measured on an **experiment-level split**, so no window from a validation
+recording appeared in training.
+
+| Site | Load | Validation accuracy |
+|---|---|---|
+| Plant A | 0 HP | 64.83% |
+| Plant B | 1 HP | 72.46% |
+| Plant C | 2 HP | 62.71% |
+| Plant D | 3 HP | 65.68% |
+
+### Federated: a negative result, presented as one
+
+FedProx (mu = 0.1, 30 rounds) reaches **42.86%** mean accuracy against a
+**60.05%** mean local baseline. More precisely, and worth saying out loud: its
+per-class recall is **OuterRace 1.0 and 0.0 for every other class, at all four
+sites** — federated averaging across clients with different class distributions
+collapsed the global model into a **majority-class predictor**. Plain FedAvg was
+worse still: it oscillated round to round, which is why FedProx is the primary
+result.
+
+### ⚠ The 91.44% figure is **not** accuracy
+
+The database holds 4,367 predictions of which 3,993 match the documented label.
+That 91.44% is **in-sample model-vs-ground-truth agreement** — each site's model
+predicted over all of its own windows, including ones it trained on. It is a
+useful integration check and a meaningless generalisation claim.
+
+**Quote 62.7–72.5%. Never quote 91.44% as accuracy.**
+
+Full detail, including the three real bugs that *lowered* these numbers, is in
+[`FleetMind_Implementation_Report.md`](FleetMind_Implementation_Report.md).
+
+---
 
 ## Architecture
 
 ```
-CWRU dataset ──▶ Ingestion ──▶ EDA ──▶ Per-site 1D-CNN (FFT-magnitude input)
-                                          │
-                        WaveGAN-lite rare-fault augmentation
-                                          │
-                        Flower federated learning (FedAvg / FedProx)
-                                          │
-                LangGraph agents: Monitor → Diagnostic → Risk → Maintenance
-                                          │
-                fleetmind.agents.sync_equipment_status (the ML → product bridge)
-                                          │
-        Equipment.status + auto-filed AI ServiceRequests ──▶ FastAPI ──▶ Next.js
-                                                        (dashboard / customer / operator)
+backend/fleetmind/
+  ingestion/    CWRU download, manifest, windowing, ingest
+  db/           SQLAlchemy models, session, seed scripts
+  api/          FastAPI app + 11 routers
+  auth/         bcrypt passwords, JWT tokens, role + row scoping
+  eda/          exploratory data analysis reports
+  ml/           model, dataset, train, evaluate, predict, bearing_freq
+  augmentation/ GAN-based rare-class augmentation
+  federated/    Flower FedAvg/FedProx simulation
+  agents/       LangGraph chain, sync_equipment_status, tools.py, llm.py
+  replay/       engine + background worker
+  pipeline.py   predict -> agents -> sync, one code path
+frontend/src/   Next.js 14 App Router, TanStack Query, Recharts, Tailwind
+alembic/        6 migrations
+tests/          257 tests
 ```
 
-Product-layer tables (`customers`, `equipment`, `technicians`,
-`service_requests`, `work_orders`) sit alongside the core ML tables
-(`depots`, `experiments`, `signal_windows`, `model_predictions`,
-`agent_decisions`) in the same Postgres database — see
-`backend/fleetmind/db/models.py` for the full schema.
+**Database:** PostgreSQL, 12 tables. Migrations run `0001` core schema → `0002`
+product tables → `0003` AI-request partial unique index → `0004` replay arrival
+marker → `0005` LLM narrative cache → `0006` users.
+
+---
 
 ## Tech stack
 
-| Layer | Tech |
+| Layer | Choice |
 |---|---|
-| Frontend | Next.js 14 (App Router) + TypeScript + Tailwind + Recharts + TanStack Query |
-| API | FastAPI + SQLAlchemy 2.0 + Alembic migrations + Pydantic v2 |
-| Database | PostgreSQL 16+ |
-| ML | PyTorch (1D-CNN on FFT-magnitude input), WaveGAN-lite augmentation, Flower federated learning (FedAvg/FedProx), LangGraph agents |
+| API | FastAPI + SQLAlchemy 2.0 + Alembic + Pydantic v2 |
+| Database | PostgreSQL 18 (native — see [Setup](#setup)) |
+| ML | PyTorch 1D-CNN on 512-bin FFT magnitude |
+| Federated | Flower (FedAvg / FedProx) |
+| Agents | LangGraph `StateGraph`, deterministic and rule-based |
+| LLM narrative | **Groq**, `openai/gpt-oss-120b` — optional |
+| Auth | PyJWT (HS256) + bcrypt, three roles |
+| Frontend | Next.js 14, TanStack Query, Recharts, Tailwind, IBM Plex |
+
+### Why Groq
+
+The LLM layer was built against the Anthropic SDK targeting Claude. The API key
+available for this project turned out to be a **Groq** key, so the module was
+rewritten for Groq.
+
+**The grounding design did not change at all** — four deterministic tools, a
+prompt containing no measurements, and a post-hoc numeric check — because none
+of it depends on the provider. Only the call shape changed. Swapping providers
+again is a rewrite of one module, not of the design.
+
+One provider quirk, found by probing rather than assumed: Groq rejects JSON mode
+combined with tool calling (`400 json mode cannot be combined with
+tool/function calling`), so the loop runs tools first and collects the
+structured answer in a second, tool-free call. A test pins this so the
+workaround cannot be undone by accident.
+
+---
 
 ## Setup
 
-Two ways to run this, depending on your machine:
+### Prerequisites on this machine
 
-### Option A — native Postgres + Python venv (used for local development on this project)
+- **PostgreSQL 18, running natively** — *not* Docker. Docker Desktop cannot run
+  here because WSL2 and Hyper-V are blocked by corporate policy.
+  Database `fleetmind`, user `fleetmind`, `localhost:5432`.
+- **Python 3.11** in a venv at the repository root (`venv/`).
+- **Node.js 24** — installed **user-scope via winget**
+  (`winget install --scope user`) because the admin-elevated installer was
+  blocked. It therefore lives under
+  `%LOCALAPPDATA%\Microsoft\WinGet\Packages\OpenJS.NodeJS.LTS_*\node-v24.19.0-win-x64\`
+  rather than `C:\Program Files\nodejs\`. It **is** on the user PATH and
+  `node`/`npm` resolve normally in PowerShell and Git Bash — but if you go
+  looking in Program Files you will not find it, and an elevated shell that does
+  not inherit the user PATH may not see it.
 
-Some environments (e.g. a locked-down company laptop) block the
-virtualization Docker Desktop needs (WSL2/Hyper-V). This path avoids Docker
-entirely for the database and backend.
+### Install
 
 ```bash
-# 1. Postgres running natively on localhost:5432, with a `fleetmind` DB/user.
-# 2. Python 3.11 venv at the repo root:
+# from the repository root
 python -m venv venv
-venv\Scripts\activate            # Windows; `source venv/bin/activate` on macOS/Linux
+venv\Scripts\activate                 # Windows
 
 cd backend
-pip install -e ".[dev]"
-# backend/.env: DATABASE_URL=postgresql://fleetmind:<password>@localhost:5432/fleetmind
+pip install -e ".[ml,dev,llm]"
+```
 
-# Migrations run in order: base -> 0001 (core ML schema) -> 0002 (product-layer schema)
+> **Run all backend commands from `backend/`.** `.env` and several relative
+> paths assume it.
+
+**On the extras:** everything needed to *boot the API* is in the core
+dependencies, including `torch` and `langgraph` — the replay router reaches both
+through `pipeline.py`. `[ml]` adds `flwr` for the federated simulation, `[dev]`
+the test and lint tools, `[llm]` the `groq` client.
+`tests/test_dependencies.py` fails if anything the API imports drifts back into
+an optional extra.
+
+### Configure
+
+`backend/.env`:
+
+```ini
+DATABASE_URL=postgresql://fleetmind:<password>@localhost:5432/fleetmind
+
+# Optional. Without it the whole rule-based pipeline still runs; only the
+# narrative endpoint returns a clear 503.
+GROQ_API_KEY=gsk_...
+GROQ_MODEL=openai/gpt-oss-120b
+
+# Optional but recommended. With no secret the API generates a random one per
+# process and logs a warning -- tokens then stop surviving a restart.
+JWT_SECRET=<python -c "import secrets; print(secrets.token_urlsafe(48))">
+```
+
+`frontend/.env` (local only, not committed):
+
+```ini
+NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000
+```
+
+> Pin this to `127.0.0.1`, not `localhost`. Docker Desktop's `wslrelay.exe` can
+> squat on `[::1]:8000` (IPv6 loopback) and 404 every browser-side fetch while
+> server-side fetches keep working — a genuinely confusing failure mode that
+> cost real time on this project.
+
+### Migrate and seed
+
+Order matters — the user scopes point at customer and site rows:
+
+```bash
+cd backend
 alembic upgrade head
-
-# Seed order matters: product tables (customers/equipment/technicians) must
-# exist before the agent-sync bridge can link equipment to experiments.
 python -m fleetmind.db.seed_product_tables
-
-uvicorn fleetmind.api.main:app --reload    # API at :8000
-```
-
-```bash
-cd frontend
-npm install
-NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev   # dashboard at :3000
-```
-
-### Option B — Docker Compose
-
-```bash
-cp .env.example .env      # fill in real values
-docker compose up --build
-# Dashboard:  http://localhost:3000
-# API docs:   http://localhost:8000/docs
-# Adminer:    http://localhost:8080
-```
-
-`docker-compose.yml` lives at the repo root; its `api`/`migrate` services
-build from `./backend` and `frontend` builds from `./frontend` — both
-relative to the repo root, since that's where the compose file is.
-`migrate` runs `alembic upgrade head` automatically; run
-`python -m fleetmind.db.seed_product_tables` inside the `api` container
-afterward to seed the product layer (see Option A's seed-order note above).
-
-## Data & ML pipeline
-
-Run from `backend/`, after ingestion (`python -m fleetmind.ingestion.download`,
-`.manifest`, `.ingest` — needs `KAGGLE_USERNAME`/`KAGGLE_KEY` in `.env` to pull
-the CWRU mirror):
-
-```bash
-# Per-site classifier (honest experiment-level split, FFT-magnitude input)
-python -m fleetmind.ml.train --depot-id 1 --epochs 20
-python -m fleetmind.ml.evaluate --depot-id 1
-
-# Rare-class augmentation (WaveGAN-lite) + comparison report, per site
-python -m fleetmind.augmentation.run --depot-id 1
-
-# Federated learning across all 4 sites — FedProx is the primary result;
-# plain FedAvg is unstable under real per-site class imbalance
-python -m fleetmind.federated.run --strategy fedprox --mu 0.1 --rounds 30
-
-# Populate model_predictions + agent_decisions for the LangGraph chain
-python -m fleetmind.ml.predict --all-depots
-python -m fleetmind.agents.run --all-pending
-
-# Bridge agent_decisions into Equipment.status + auto-file AI service requests
-python -m fleetmind.agents.sync_equipment_status          # --dry-run to preview
-
-# Demo logins (run AFTER seed_product_tables.py -- the role scopes point at
-# customer and site rows, so those have to exist first)
 python -m fleetmind.db.seed_users
 ```
 
-### Signing in
+### Run both servers
 
-Every endpoint except `POST /auth/login` and the `GET /livez` liveness probe
-requires a bearer token, including `/health`. `POST /auth/login` returns one.
+**One command (recommended):**
 
-Three roles, each with a different scope, enforced **at the API layer** rather
-than by hiding things in the UI:
+```powershell
+.\scripts\start-demo.ps1
+```
 
-| Role | Sees |
-|---|---|
-| `customer` | only its own equipment and service requests, at any site |
-| `operator` | only its own site's equipment, queue and dispatches |
-| `admin` | everything, including the replay controls |
+It frees ports 8000 and 3000, starts both servers clean, waits until each
+answers healthy, and prints the demo logins.
 
-Seeded demo logins — these passwords are published on purpose so a reviewer
-can sign in as each role and check that the restrictions are real. The two
-operators sit at **different** sites so the site scoping is demonstrable:
+**Manually:**
+
+```bash
+# terminal 1 — from backend/, venv active
+python -m uvicorn fleetmind.api.main:app --host 127.0.0.1 --port 8000
+
+# terminal 2 — from frontend/
+npm install      # first time only; CI uses npm ci against the committed lockfile
+npm run dev
+```
+
+Then open **http://localhost:3000**.
+
+> **uvicorn runs without `--reload`.** Restart it after every backend change — a
+> stale process serving old code has caused phantom failures here more than once.
+
+> **Never run `npm run build` while `npm run dev` is live in the same
+> directory.** The production build overwrites the dev server's `.next` asset
+> manifests and every page starts 404-ing its own JS. Stop dev, delete `.next`,
+> build, then restart dev fresh.
+
+### Sign in
+
+Every route requires a bearer token except `POST /auth/login` and the
+unauthenticated `GET /livez` liveness probe — **including `/health`**, which
+reports database state.
+
+These passwords are published deliberately, so a reviewer can sign in as each
+role and verify the restrictions are real. The two operators sit at
+**different** sites on purpose.
 
 | Email | Password | Role |
 |---|---|---|
@@ -153,140 +279,144 @@ operators sit at **different** sites so the site scoping is demonstrable:
 | `customer.acme@fleetmind.example.com` | `customer-demo-2026` | customer — Acme Manufacturing |
 | `customer.northwind@fleetmind.example.com` | `customer-demo-2026` | customer — Northwind Steel |
 
+---
+
+## Data & ML pipeline
+
+```bash
+cd backend
+
+# Ingest CWRU (needs KAGGLE_USERNAME/KAGGLE_KEY, or download manually)
+python -m fleetmind.ingestion.download
+python -m fleetmind.ingestion.ingest
+
+# Per-site classifier (experiment-level split, FFT-magnitude input)
+python -m fleetmind.ml.train --depot-id 1 --epochs 20
+python -m fleetmind.ml.evaluate --depot-id 1
+
+# Rare-class augmentation + comparison report
+python -m fleetmind.augmentation.run --depot-id 1
+
+# Federated learning across all 4 sites
+python -m fleetmind.federated.run --strategy fedprox --mu 0.1 --rounds 30
+
+# Predictions -> agent decisions -> equipment status + auto-filed requests
+python -m fleetmind.ml.predict --all-depots
+python -m fleetmind.agents.run --all-pending
+python -m fleetmind.agents.sync_equipment_status        # --dry-run to preview
+```
+
+### The replay (live automation)
+
+CWRU is a **static archive**, so a scheduler over it would recompute identical
+results on a timer. Instead `signal_windows.released_at` marks *arrival*, and
+the replay engine progressively releases archived windows as if sensors were
+streaming them. The dashboard's Live Automation panel drives it.
+
+> **It is a replay of recorded data — not live telemetry, and no sensors are
+> attached.** The UI says so on the panel itself.
+
+---
+
+## Authentication
+
+Three roles, enforced at the API layer:
+
+| Role | Sees |
+|---|---|
+| `customer` | Only its own equipment and requests |
+| `operator` | Only its own site's equipment, queue and dispatches |
+| `admin` | Everything, including replay |
+
+The guarantee worth checking: **a caller's scope is read from their user row and
+applied before any query parameter they send**, so `?customer_id=…` or
+`?depot_id=…` can only ever narrow a result set, never widen it. A row outside
+scope returns **404, not 403**, so ids cannot be enumerated from status codes.
+
 ```bash
 TOKEN=$(curl -s -X POST localhost:8000/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"operator.a@fleetmind.example.com","password":"operator-demo-2026"}' \
   | python -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
 
-curl -s localhost:8000/equipment -H "Authorization: Bearer $TOKEN"   # 2 machines
-curl -s localhost:8000/equipment                                     # 401
+curl -s localhost:8000/equipment -H "Authorization: Bearer $TOKEN"     # 2 machines
+curl -s localhost:8000/equipment                                       # 401
 curl -s localhost:8000/replay/status -H "Authorization: Bearer $TOKEN"  # 403, admin only
 ```
 
-The guarantee worth checking: a caller's scope is read from their user row and
-applied *before* any query parameter they send, so `?customer_id=…` or
-`?depot_id=…` can only ever narrow a result set, never widen it.
-`backend/tests/test_auth.py` asserts this directly, and one of its tests walks
-the application's own route table so a router added later without a guard
-fails the suite instead of shipping open.
+`backend/tests/test_auth.py` asserts all of this directly, and one of its tests
+walks the application's **own route table**, so a router added later without a
+guard fails the suite instead of shipping open.
 
-### Optional: the LLM write-up layer
-
-Everything above is deterministic Python. One further, optional step adds a
-real Claude call that turns a flagged request into the prose a technician
-reads:
-
-```bash
-pip install -e ".[llm]"                 # from backend/
-echo 'ANTHROPIC_API_KEY=sk-ant-...'  >> .env
-
-curl -X POST localhost:8000/service-requests/41/narrative
-```
-
-The model is given **no raw signal and no arithmetic**. It can only call four
-tools (`fleetmind/agents/tools.py`) that wrap the same functions which already
-produced the stored decision — signal statistics, the rule-based risk
-assessment, the bearing characteristic frequencies, and a spectral band-energy
-probe — and it is forbidden to state a figure that did not come back from one.
-A post-hoc check (`verify_numbers_are_grounded`) looks for any number in the
-prose that no tool result accounts for and stores what it finds alongside the
-narrative, so the guard's own track record is inspectable.
-
-Narratives are cached in `llm_narratives` (one row per service request), so
-generation costs one API call per flagged machine, not one per page view. With
-no key configured the endpoint returns a clear `503` and nothing else changes:
-predictions, risk scores, equipment flagging and auto-filed service requests
-are all unaffected.
-
-Current real results (see `CLAUDE.md` for the full write-up and the two
-architecture/data bugs that were fixed to get here — data leakage from a
-per-window split, and an `AdaptiveAvgPool1d` collapsing the fault-repetition
-signal): per-site validation accuracy 62.7–72.5%; FedProx over 30 rounds
-converges to a mean accuracy of 42.9% vs. a 60.0% mean local baseline — a
-real, documented federated-averaging gap under non-IID class imbalance, not
-a bug to "fix away."
+---
 
 ## Testing
 
 ```bash
 cd backend
-ruff check .            # lint
-ruff format --check .   # format
-mypy fleetmind          # type check
-pytest                  # sqlite-backed test suite, no DB needed
-```
+pytest                      # 257 tests
+ruff check .
+ruff format --check .
+mypy fleetmind
 
-```bash
-cd frontend
+cd ../frontend
 npx tsc --noEmit
 npm run build
 ```
 
-## CI
+---
 
-GitHub Actions (`.github/workflows/ci.yml`): ruff lint + format check, mypy,
-pytest (with a Postgres service container + Alembic migrations), Next.js
-build, and Docker image builds — on every push/PR to `main`.
+## Known honest limitations
 
-## Project layout
+1. **Docker is unverified end to end.** `docker compose config` resolves
+   cleanly and the images are defined, but the Docker daemon is unreachable on
+   the development laptop (WSL2/Hyper-V blocked by policy), so
+   `docker compose up` has **never actually been run**. Treat the Compose path
+   as untested.
+2. **The GAN augmentation has an unresolved domain mismatch.** TimeGAN
+   generates *time-domain* synthetic windows, but the classifier now trains on
+   their *FFT magnitude*. A window can be plausible in time and unrealistic in
+   frequency — the likely reason augmentation sometimes hurts accuracy.
+   Documented, not fixed.
+3. **GPS / location fields on `Equipment` and `WorkOrder` are simulated.** CWRU
+   has no location telemetry. They are labelled as simulated wherever shown and
+   never implied to be real.
+4. **The four "sites" are four CWRU motor load levels.** A real site could host
+   machines at several loads; these cannot. Display names keep the mapping
+   visible (*Plant A (CWRU 0 HP)*).
+5. **`Equipment.linked_experiment_id` is a simulated association** between a
+   product row and a bench recording — the largest open modelling gap.
+6. **The federated result is negative** (see above), presented as a finding
+   rather than tuned away.
+7. **Defect-band corroboration is often weak.** On the sampled windows the
+   dominant spectral energy does not sit on the characteristic defect
+   frequency. The evidence UI surfaces this rather than cropping it away.
+8. **Auth is demo-grade.** The JWT lives in `localStorage` rather than an
+   httpOnly cookie, because the API is a separate origin. Every restriction is
+   still server-side — a stolen token cannot read another tenant's rows — but
+   there is no refresh rotation, rate limiting or password reset, and the demo
+   passwords above are public.
+9. **No literature review document exists yet.** It is outstanding work.
 
-```
-backend/
-  fleetmind/
-    ingestion/          # download, manifest, windowing, CWRU ingest
-    db/                 # ORM models (core ML + product-layer), session, seed scripts
-    api/                # FastAPI app + routers (depots/experiments/stats/windows/
-                         #   equipment/service-requests/work-orders/customers/technicians)
-    eda/                # EDA report generation
-    ml/                 # model, dataset, train, evaluate, predict
-    augmentation/       # WaveGAN-lite rare-class augmentation
-    federated/          # Flower FedAvg/FedProx simulation
-    agents/             # LangGraph Monitor->Diagnostic->Risk->Maintenance chain,
-                         #   + sync_equipment_status (the ML -> product bridge)
-                         #   + tools.py / llm.py (the optional Claude write-up layer)
-    auth/               # bcrypt passwords, JWT issue/decode, role + row scoping
-  alembic/              # migrations (0001 core schema, 0002 product-layer schema)
-  tests/                # pytest suite (sqlite-backed)
-frontend/
-  src/app/              # Next.js 14 dashboard, customer/ and operator/ pages
-.github/workflows/      # CI pipeline
-docker-compose.yml      # postgres + api + migrate + frontend + adminer
-```
+---
 
-## Known, honest limitations
+## Documentation
 
-- Location/GPS fields on `Equipment`/`WorkOrder` are **simulated** — CWRU has
-  no location telemetry — and are labeled as such wherever the UI shows them.
-- WaveGAN-lite augmentation currently generates *time-domain* synthetic
-  windows, but the classifier trains on their FFT magnitude; synthetic
-  windows can be time-domain-plausible while spectrally unrealistic, which is
-  a likely reason augmentation sometimes hurts post-fix accuracy.
-- The federated accuracy gap vs. local baselines (see above) is a known,
-  published FL phenomenon under real class imbalance — presented as a
-  finding, not concealed.
-- The bearing characteristic frequencies shown as evidence are **independent
-  corroboration, not an explanation of the model**. The CNN consumes a
-  log-scaled, z-normalised FFT magnitude and was never given these
-  frequencies; the UI says so wherever a defect band is drawn.
-- The LLM write-up is prose about numbers it was handed, not an analysis. It
-  cannot change a risk score, an urgency or an equipment status — every one of
-  those still comes from rule-based code — and the grounding check that backs
-  this up is a blunt numeric scan, not a proof.
-- The frontend keeps its JWT in `localStorage`, not an httpOnly cookie, so it
-  is readable by injected script. The API is a separate origin, so a cookie
-  would need `SameSite=None; Secure`, credentialed CORS and TLS in front of
-  both — more moving parts than a local demo warrants. It does not weaken what
-  this layer demonstrates: every restriction is enforced server-side, so a
-  stolen or hand-edited token still cannot read another tenant's rows.
-  Switching to cookies is a deployment change, not a redesign.
-- Demo passwords are weak and published above, deliberately. There is no
-  signup, password reset, rate limiting or refresh-token rotation — all of
-  which a real deployment needs and none of which this demo has.
+| File | What it is |
+|---|---|
+| [`FleetMind_Implementation_Report.md`](FleetMind_Implementation_Report.md) | Full technical account, every figure re-verified |
+| [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) | Click-through for the defence, with caveats to volunteer |
+| [`CLAUDE.md`](CLAUDE.md) | Working context + the authoritative Progress log |
+| [`docs/adr/`](docs/adr/) | Architecture decision records |
+| [`docs/audit.md`](docs/audit.md) | Repo audit, with a status banner per finding |
+
+---
 
 ## Dataset
 
-Case Western Reserve University (CWRU) Bearing Dataset — drive-end (DE)
-accelerometer, 12 kHz, fault classes: Normal / Ball / Inner Race / Outer Race,
-4 motor loads (0–3 HP → 4 simulated manufacturing sites). Windowed at 2,048 samples.
-Cite the original source: https://engineering.case.edu/bearingdatacenter
+Case Western Reserve University (CWRU) Bearing Data Center — drive-end
+accelerometer, 12 kHz, classes Normal / Ball / Inner Race / Outer Race, four
+motor loads (0–3 HP) standing in for four manufacturing sites. Windowed at
+2,048 samples.
+
+**Cite the original source:** https://engineering.case.edu/bearingdatacenter
