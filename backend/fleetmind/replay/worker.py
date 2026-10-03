@@ -181,6 +181,19 @@ class ReplayWorker:
                 await task
         return True
 
+    def reset_counters(self) -> None:
+        """Zero the per-run counters so a rewound simulation reads as rewound.
+
+        `start()` already zeroes `ticks`, but `/replay/reset` only stops the
+        worker -- so between a reset and the next start the dashboard showed a
+        stale tick count beside 0 / 4,367 arrivals, which reads as a bug in
+        exactly the state a demo is left in. Counters only; the configured
+        interval and batch size are user settings and survive a reset.
+        """
+        self.ticks = 0
+        self.last_tick = None
+        self.last_error = None
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "running": self.running,

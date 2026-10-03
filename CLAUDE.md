@@ -279,3 +279,11 @@ A nine-item **known honest limitations** section leads with Docker being genuine
 **Item 5 needed no work, verified rather than assumed:** `frontend/package-lock.json` exists, has been tracked since commit `a7395fdf`, is not gitignored, CI already uses `npm ci` with `cache: npm`, and `npm ci --dry-run` reports "up to date" — so the lockfile is in sync with `package.json` and did not need regenerating.
 
 One forward reference: the README documents `.\scripts\start-demo.ps1` as the one-command startup, which is created in the next commit (Slice N item 4).
+
+2026-10-03 — Slice N (item 3) — demo state reset to a clean zero, and a stale-counter wart fixed on the way — verified via: live `POST /replay/reset` then `GET /replay/status` against the running API; `pytest tests/test_replay_api.py` (11 passing, 2 new) — result: pass.
+
+The reset itself worked first time: `windows_unreleased 4367, predictions_deleted 4367, decisions_deleted 4367, ai_service_requests_deleted 6, work_orders_deleted 0, equipment_reset_to_active 6`, leaving `released 0/4367, processed 0, complete false, running false`.
+
+**But `ticks` survived it.** `ReplayWorker.ticks` is zeroed in `start()` and nowhere else, while `/replay/reset` only calls `worker.stop()` — so between a reset and the next start the dashboard showed `Ticks 10` beside `0 / 4,367 windows arrived`. Harmless to the data, but it reads as a bug, and it is visible in **exactly the state this item exists to leave the system in**. Added `ReplayWorker.reset_counters()` (ticks, last_tick, last_error) and called it from the reset endpoint; the configured `interval_seconds` and `batch_size` are user settings, not per-run counters, so they deliberately survive. Two tests added, and `test_reset_zeroes_the_worker_counters` was **confirmed to fail without the fix** (`AssertionError: assert 10 == 0`).
+
+Backend restarted to pick up the change (uvicorn runs without `--reload`), reset re-run, and the final state verified: every counter in `/replay/status` now reads zero.

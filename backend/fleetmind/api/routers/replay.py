@@ -110,6 +110,9 @@ async def reset(db: Session = Depends(db_session.get_session)):
     data; customer-filed requests and retired equipment are preserved.
     """
     await worker.stop()
+    # Rewind the in-process counters too, not just the database rows -- a
+    # stale tick count beside zero arrivals reads as a bug.
+    worker.reset_counters()
     summary = reset_replay(db)
     db.commit()
     return ReplayResetResponse(**summary)

@@ -175,3 +175,37 @@ def test_reset_reports_what_it_cleared(product_client, product_session):
     assert body["ai_service_requests_deleted"] == 1
     assert body["equipment_reset_to_active"] == 1
     assert body["decisions_deleted"] == 1
+
+
+def test_reset_zeroes_the_worker_counters(product_client):
+    """A rewound simulation must read as rewound.
+
+    start() already zeroes ticks, so this gap only showed between a reset and
+    the next start -- which is exactly the state a demo is left in, where the
+    dashboard would show a stale tick count beside 0 arrivals.
+    """
+    from fleetmind.replay.worker import worker
+
+    worker.ticks = 10
+    worker.last_error = "something old"
+
+    resp = product_client.post("/replay/reset")
+
+    assert resp.status_code == 200
+    assert worker.ticks == 0
+    assert worker.last_tick is None
+    assert worker.last_error is None
+    assert product_client.get("/replay/status").json()["worker"]["ticks"] == 0
+
+
+def test_reset_preserves_the_configured_interval_and_batch_size(product_client):
+    """Those are user settings, not per-run counters."""
+    from fleetmind.replay.worker import worker
+
+    worker.interval_seconds = 3.0
+    worker.batch_size = 123
+
+    product_client.post("/replay/reset")
+
+    assert worker.interval_seconds == 3.0
+    assert worker.batch_size == 123
