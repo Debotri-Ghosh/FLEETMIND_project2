@@ -345,3 +345,20 @@ The production build was run **only after stopping the dev server and clearing `
 - Database: **equipment 8 active / 0 maintenance**, predictions 0, decisions 0, AI requests 0, users 5. Exactly the pre-replay state, with the five demo logins intact.
 
 The system is ready for a live run: open the Dashboard, press **Start live replay**, and the automation becomes visible within about three seconds.
+
+2026-10-03 — Post-Slice-O fix — **the page would not load, and the cause was a bug in the startup script I had just written** — verified via: the frontend dev log, `Get-CimInstance Win32_Process`, per-chunk `curl`, and a real browser render — result: fixed and confirmed.
+
+**Symptom.** The page HTML returned `200` but rendered blank/unstyled. The dev log showed every static asset 404ing: `GET /_next/static/chunks/main-app.js 404`, `app/login/page.js 404`, `css/app/layout.css 404`.
+
+**Cause — not the usual one.** This looks exactly like the known "production build beside a live dev server" corruption, and I nearly treated it as that. It was not. `Get-CimInstance Win32_Process` showed **two `next dev` processes running at once** (PIDs 18664 and 26512), fighting over the same `.next` directory: one writes the chunks, the other serves and cannot find them.
+
+**Why there were two: `scripts/start-demo.ps1` only killed the port listener.** `npm run dev` is a process *tree* — `cmd.exe` → `npm` → `node .../next/dist/bin/next dev` — and only the outermost process holds port 3000. `Stop-Process -Id <listener>` killed that one and **orphaned the `next dev` child**, which kept running and kept writing to `.next`. Three runs of the script across this session therefore accumulated orphans. The script written to prevent exactly this class of problem was causing it.
+
+**Fix, three parts:**
+1. `taskkill /PID <pid> /T /F` instead of `Stop-Process` — `/T` kills the whole tree, so no child is orphaned.
+2. A new `Stop-OrphanedNextDev` sweep that finds `node.exe` processes whose command line matches `next/dist/bin/next` and tree-kills them. A `next dev` child can outlive its parent *without holding port 3000*, so freeing the port alone never finds it. Matched on command line so only this project's dev servers are touched.
+3. The `.next` wipe now reports if the directory survives deletion (a live process holding it), instead of failing silently under `-ErrorAction SilentlyContinue`.
+
+**Verified properly this time.** Previous runs only checked that `/login` returned `200` — which it did, while every asset under it 404'd. That check was too shallow and is the reason this shipped. Now: extracted every `/_next/...` URL from the served HTML and fetched each one (**all 200**), then rendered in a real browser — login page styled (`rgb(14, 17, 22)`), sign-in succeeds, dashboard reaches `/` with Live Automation, Frequency Lab and the counter at `0 / 4,367`, **zero failed requests and zero page errors**, every API call `200`.
+
+**Lesson for future verification:** "the page returns 200" is not "the page loads". Fetch the assets the HTML references, or render it.

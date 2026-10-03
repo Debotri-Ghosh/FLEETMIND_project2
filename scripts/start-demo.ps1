@@ -76,7 +76,14 @@ function Stop-PortListener {
         try {
             $proc = Get-Process -Id $processId -ErrorAction Stop
             Write-Warn2 "port $Port held by $($proc.ProcessName) (PID $processId) - stopping it"
-            Stop-Process -Id $processId -Force -ErrorAction Stop
+            # taskkill /T, not Stop-Process: `npm run dev` is a process TREE
+            # (cmd -> npm -> node "next dev"), and only the outermost one holds
+            # the port. Stop-Process kills that one and orphans the `next dev`
+            # child, which keeps running and keeps writing to .next. Two
+            # orphaned dev servers then fight over the same directory: one
+            # writes the chunks, the other serves and 404s every one of them,
+            # so the page loads as blank HTML with no JS or CSS.
+            & taskkill.exe /PID $processId /T /F 2>&1 | Out-Null
         } catch {
             Write-Warn2 "could not stop PID ${processId}: $($_.Exception.Message)"
         }
@@ -153,10 +160,29 @@ if (-not $SkipFrontend) {
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
+# ── sweep orphaned next dev processes ─────────────────────────────────
+# A `next dev` child can survive its parent and keep writing to .next without
+# holding port 3000, so freeing the port alone does not find it. Matched on the
+# command line so only THIS project's dev servers are touched.
+function Stop-OrphanedNextDev {
+    $orphans = @(
+        Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and $_.CommandLine -match 'next[\/]dist[\/]bin[\/]next' }
+    )
+    foreach ($o in $orphans) {
+        Write-Warn2 "stopping stray next dev (PID $($o.ProcessId))"
+        & taskkill.exe /PID $o.ProcessId /T /F 2>&1 | Out-Null
+    }
+    if (-not $orphans) { Write-Ok 'no stray next dev processes' }
+}
+
 # ── free the ports ────────────────────────────────────────────────────
 Write-Step 'Freeing ports 8000 and 3000'
 Stop-PortListener -Port 8000
-if (-not $SkipFrontend) { Stop-PortListener -Port 3000 }
+if (-not $SkipFrontend) {
+    Stop-PortListener -Port 3000
+    Stop-OrphanedNextDev
+}
 
 # ── backend ───────────────────────────────────────────────────────────
 Write-Step 'Starting backend (uvicorn, no --reload)'
@@ -183,10 +209,16 @@ if (-not $SkipFrontend) {
 
     # A .next directory left by a production build breaks the dev server's
     # asset manifests, and every page 404s its own JS. Cheap to avoid.
+    # Must happen AFTER every dev server is dead -- deleting .next underneath a
+    # running one leaves a half-written cache that 404s its own chunks.
     $nextDir = Join-Path $FrontendDir '.next'
     if (Test-Path $nextDir) {
         Remove-Item -Recurse -Force $nextDir -ErrorAction SilentlyContinue
-        Write-Ok 'cleared stale .next'
+        if (Test-Path $nextDir) {
+            Write-Warn2 '.next could not be fully removed (a process may still hold it)'
+        } else {
+            Write-Ok 'cleared stale .next'
+        }
     }
 
     Start-Process -FilePath 'cmd.exe' `
