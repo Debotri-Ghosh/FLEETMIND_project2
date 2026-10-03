@@ -44,7 +44,7 @@ backend/fleetmind/
   federated/    client.py, run.py, flower_client.py â€” FedAvg/FedProx simulation
   agents/       state.py, agents.py, graph.py, run.py â€” LangGraph Monitor->Diagnostic->Risk->Maintenance
                 sync_equipment_status.py â€” the ML -> product bridge
-                tools.py, llm.py â€” the optional Claude write-up layer (see Slice G)
+                tools.py, llm.py â€” the optional LLM write-up layer (Groq; see Slice G/I)
   replay/       engine.py, worker.py â€” progressive release of archived windows
   pipeline.py   process_arrived_windows(): predict -> agents -> sync, one code path
 frontend/src/   Next.js 14 â€” app/page.tsx (dashboard), app/customer/, app/operator/,
@@ -65,7 +65,7 @@ Per-depot classifier (`mlruns/depot_{1-4}/metrics.json`): honest experiment-leve
 
 Federated (`mlruns/federated/fedprox/federated.json`): FedProx (mu=0.1, 30 rounds) converges to mean accuracy 0.429 (vs mean local baseline 0.600) â€” a real, documented gap, not a bug. FedAvg (no proximal term) is unstable/oscillating and should not be presented as the primary result â€” FedProx is.
 
-`model_predictions` (4,367 rows) and `agent_decisions` (4,367 rows) are freshly regenerated from the current fixed models â€” real, not placeholders. Verified via direct psql queries, not just app-level.
+`model_predictions` and `agent_decisions` hold **one row per processed window, up to 4,367 each** â€” real, not placeholders, verified via direct psql queries rather than app-level reads. **These counts are replay-dependent and are 0 immediately after a `/replay/reset`**, which is the state the demo is deliberately left in; they refill as the replay runs. Do not read an empty table as a broken pipeline â€” check `/replay/status` first.
 
 **Two different agent input paths exist — know which one produced a number before quoting it.** `agents/run.py --all-pending` (the original batch CLI) passes each window's *ground-truth* `SignalWindow.label` into the agent chain. `fleetmind/pipeline.py:process_arrived_windows()` (the replay/live path, added 2026-09-25) passes the *model's* `ModelPrediction.predicted_label` + confidence instead — the honest sensor→model→decision flow the project claims. They give different downstream results, because the model disagrees with ground truth on 374/4,367 windows (91.4% in-sample agreement): the ground-truth path flags **4** equipment and files 4 AI service requests; the model-prediction path flags **6** and files 6, since the model predicts a worse fault than the true label on some windows. The live DB currently holds the **model-prediction** result (6). Neither path is wrong, but only the model-prediction one demonstrates the model actually driving maintenance decisions — quote that one, and say which it is. `agents/run.py` is deliberately left unchanged so the older documented batch figures stay reproducible.
 
@@ -119,13 +119,22 @@ TimeGAN/GAN-based augmentation (`augmentation/gan.py`) currently generates *time
 
 ### Known outstanding
 
-- **Slice G's one real live Anthropic API call has not been made** â€” there is no credential on this machine (no `ANTHROPIC_API_KEY` in env or `backend/.env`, no `ant` CLI, no `~/.config/anthropic/`). Everything around it is built, tested and live; the endpoint returns a clean 503 until a key exists. The populated-panel screenshot captured so far is from a Playwright route mock and is labelled as such, not as Claude output.
+- ~~Slice G's live LLM call~~ **Done 2026-10-03.** The key in `backend/.env` turned out to be a **Groq** key (`gsk_` prefix), not an Anthropic one, so `agents/llm.py` was rewritten for Groq on `openai/gpt-oss-120b` and the call was made for real against the live DB. The narrative panel has been browser-verified against real generated data, no route mock. **No literature review document exists** â€” see below.
 - TimeGAN/GAN augmentation is still time-domain while the classifier trains on FFT â€” see "Known trade-off" above.
 - `docker compose up` end-to-end is still unverified: the Docker daemon is not reachable on this laptop. `docker compose config` does resolve cleanly.
 
-## Literature review (6 papers) and full implementation report
+## Project documentation
 
-See `FleetMind_Implementation_Report.md` and `FleetMind_Literature_Review.md` in the project docs for the full write-up, dataset-selection rationale, and paper-to-subsystem mapping â€” reference these rather than re-deriving justifications from scratch.
+| File | What it is |
+|---|---|
+| `FleetMind_Implementation_Report.md` | Full technical account, written 2026-10-03 from the commit history with every figure re-verified against the live system. |
+| `README.md` | Presentation-ready overview, setup for *this* machine, honest limitations. |
+| `DEMO_SCRIPT.md` | Click-through for the defence: which button, what to point at, which caveats to volunteer. |
+| `scripts/start-demo.ps1` | One command to bring the demo up and reset the replay. |
+| `docs/adr/` | Architecture decision records. |
+| `docs/audit.md` | 2026-09-30 repo audit, with a dated status banner per finding. |
+
+> **`FleetMind_Literature_Review.md` does not exist and never has.** An earlier version of this file claimed a six-paper literature review lived at that path; it is absent from the working tree and from all 44 commits (`git log --all -- "*Literature_Review*"` returns nothing). It is outstanding work, not a missing file â€” do not cite it, and do not reconstruct its contents from guesswork.
 
 ## Progress log
 
@@ -299,3 +308,16 @@ It also encodes three environment traps this project hit for real: it probes `/l
 **A self-inflicted regression, caught by running it rather than reading it.** The first run worked but a `Start-Transcript` capture showed `PS>TerminatingError(...)` lines — alarming red text for a presenter. I "fixed" it by switching the probes from `try/catch` to `-ErrorAction SilentlyContinue`, which **broke the script**: in Windows PowerShell 5.1 `Invoke-WebRequest` raises a *terminating* error on a refused connection, so `SilentlyContinue` does not suppress it and the script-level `$ErrorActionPreference = 'Stop'` aborted the whole run — the transcript ended before the frontend ever started. The original `try/catch` was correct all along; the noise was a **transcript artefact** (`Start-Transcript` logs caught terminating errors; a real console prints nothing). Reverted the probe loop to `try/catch` with a comment recording why, and kept the genuine improvement: `Get-NetTCPConnection` now uses `-ErrorAction SilentlyContinue`, since "nothing is listening" really is a non-terminating error there.
 
 Verified the right way the second time — captured raw stdout+stderr instead of a transcript: **0 `TerminatingError` lines, 0 exception traces**, and the full banner printed. `.demo-logs/` added to `.gitignore`.
+
+2026-10-03 — Slice N (items 5 + 6) — lockfile verified, CLAUDE.md header re-audited against the real repo — verified via: `npm ci --dry-run`, `git ls-files`, `git check-ignore`, and a line-by-line comparison of the header's claims against the live database, the filesystem and `git log --all` — result: pass; item 5 needed no change, item 6 found **four stale claims**, all corrected.
+
+**Item 5 — no work needed, and verified rather than assumed.** `frontend/package-lock.json` exists, has been tracked since commit `a7395fdf`, is not gitignored, CI already runs `npm ci` with `cache: npm`, and `npm ci --dry-run` reports "up to date in 2s" — so the lockfile is genuinely in sync with `package.json`. Regenerating it would have been churn.
+
+**Item 6 — the header had drifted again, and one of the four was actively misleading.**
+
+1. **"Slice G's one real live Anthropic API call has not been made"** — in the *Known outstanding* section, i.e. the first place a future session looks for what is left to do. It **has** been made (commit `cdd2a87a`), against Groq. Now marked done with the provider change explained.
+2. **The architecture tree still called `llm.py` "the optional Claude write-up layer."** It has been Groq since `cdd2a87a`.
+3. **"`model_predictions` (4,367 rows) and `agent_decisions` (4,367 rows)"** — both are **0 right now**, because item 3 deliberately reset the replay to zero for the demo. The claim was true when written and is false in the state the project is being left in. Rewritten to say the counts are *replay-dependent*, are 0 immediately after a reset, and that an empty table means "check `/replay/status` first", not "the pipeline is broken".
+4. **The literature review.** The header pointed at `FleetMind_Literature_Review.md` "in the project docs" for the dataset-selection rationale and paper-to-subsystem mapping. That file is absent from the working tree and from **all 44 commits**. Replaced with a `## Project documentation` index of the files that *do* exist (implementation report, README, DEMO_SCRIPT, `start-demo.ps1`, ADRs, audit) plus an explicit note that the literature review does not exist, is outstanding work rather than a missing file, and **must not be cited or reconstructed from guesswork**.
+
+Re-audited after the edit: zero occurrences of each stale string, the doc index present, and `DEMO_SCRIPT.md` / `scripts/start-demo.ps1` — both new and both previously unmentioned in the header — now discoverable from it.
