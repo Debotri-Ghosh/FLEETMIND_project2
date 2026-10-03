@@ -154,7 +154,7 @@ export const api = {
     getJson<import("./types").ServiceRequestNarrative>(
       `/service-requests/${requestId}/narrative`
     ),
-  /** Costs a real Claude API call unless one is already cached. */
+  /** Costs a real LLM API call unless one is already cached. */
   generateServiceRequestNarrative: (requestId: number, force = false) =>
     sendJson<import("./types").ServiceRequestNarrative>(
       "POST",

@@ -1,6 +1,6 @@
 """Tests for the LLM reasoning layer (agents/llm.py + agents/tools.py).
 
-Every test here mocks the Anthropic client with a scripted, deterministic
+Every test here mocks the Groq client with a scripted, deterministic
 stand-in, so the suite never makes a network call and never costs money. The
 one real API call this feature needs is run by hand and its output recorded in
 CLAUDE.md's Progress log -- a live call in CI would be flaky and billed.
@@ -38,43 +38,77 @@ from fleetmind.agents.tools import (
     run_tool,
 )
 
-# ── a scripted stand-in for anthropic.Anthropic ────────────────────────
+# ── a scripted stand-in for groq.Groq ──────────────────────────────────
 #
 # Deliberately hand-rolled rather than MagicMock: the loop reads
-# `block.type` / `.name` / `.input` / `.id` and `response.stop_reason`, and a
+# `choices[0].message.tool_calls[*].function.{name,arguments}` and `.id`, and a
 # mock that auto-creates those attributes would pass even if the loop read the
 # wrong ones.
 
 
 @dataclass
-class FakeText:
-    text: str
-    type: str = "text"
+class FakeFunction:
+    name: str
+    arguments: str
 
 
 @dataclass
-class FakeToolUse:
-    name: str
-    input: dict[str, Any]
-    id: str = "toolu_fake"
-    type: str = "tool_use"
+class FakeToolCall:
+    function: FakeFunction
+    id: str = "call_fake"
+    type: str = "function"
+
+
+@dataclass
+class FakeMessage:
+    content: str | None = None
+    tool_calls: list[FakeToolCall] | None = None
+
+
+@dataclass
+class FakeChoice:
+    message: FakeMessage
+    finish_reason: str = "stop"
 
 
 @dataclass
 class FakeUsage:
-    input_tokens: int = 100
-    output_tokens: int = 50
+    prompt_tokens: int = 100
+    completion_tokens: int = 50
 
 
 @dataclass
 class FakeResponse:
-    content: list[Any]
-    stop_reason: str = "end_turn"
+    choices: list[FakeChoice]
     usage: FakeUsage = field(default_factory=FakeUsage)
-    stop_details: Any = None
 
 
-class FakeMessages:
+def tool_turn(*calls: tuple[str, dict[str, Any]]) -> FakeResponse:
+    """A turn in which the model asks for tools."""
+    return FakeResponse(
+        choices=[
+            FakeChoice(
+                message=FakeMessage(
+                    content="",
+                    tool_calls=[
+                        FakeToolCall(
+                            function=FakeFunction(name=name, arguments=json.dumps(args)),
+                            id=f"call_{i}",
+                        )
+                        for i, (name, args) in enumerate(calls)
+                    ],
+                ),
+                finish_reason="tool_calls",
+            )
+        ]
+    )
+
+
+def text_turn(content: str) -> FakeResponse:
+    return FakeResponse(choices=[FakeChoice(message=FakeMessage(content=content))])
+
+
+class FakeCompletions:
     def __init__(self, script: list[FakeResponse]):
         self._script = list(script)
         self.calls: list[dict[str, Any]] = []
@@ -86,9 +120,14 @@ class FakeMessages:
         return self._script.pop(0)
 
 
-class FakeAnthropic:
+class FakeGroq:
     def __init__(self, script: list[FakeResponse]):
-        self.messages = FakeMessages(script)
+        self.chat = type("FakeChat", (), {})()
+        self.chat.completions = FakeCompletions(script)
+
+    @property
+    def calls(self) -> list[dict[str, Any]]:
+        return self.chat.completions.calls
 
 
 FINAL_JSON = json.dumps(
@@ -107,27 +146,16 @@ FINAL_JSON = json.dumps(
 
 
 def _script_full_run() -> list[FakeResponse]:
-    """Three no-arg tools, then a band probe, then the answer."""
+    """Three no-arg tools, a band probe, a tool-free turn, then the JSON."""
     return [
-        FakeResponse(
-            content=[
-                FakeToolUse("get_signal_statistics", {}, id="t1"),
-                FakeToolUse("get_risk_assessment", {}, id="t2"),
-                FakeToolUse("get_bearing_frequency_match", {}, id="t3"),
-            ],
-            stop_reason="tool_use",
+        tool_turn(
+            ("get_signal_statistics", {}),
+            ("get_risk_assessment", {}),
+            ("get_bearing_frequency_match", {}),
         ),
-        FakeResponse(
-            content=[
-                FakeToolUse(
-                    "measure_spectral_band_energy",
-                    {"low_hz": 150.0, "high_hz": 170.0},
-                    id="t4",
-                )
-            ],
-            stop_reason="tool_use",
-        ),
-        FakeResponse(content=[FakeText(FINAL_JSON)]),
+        tool_turn(("measure_spectral_band_energy", {"low_hz": 150.0, "high_hz": 170.0})),
+        text_turn("I have what I need."),  # phase 1 ends
+        text_turn(FINAL_JSON),  # phase 2, JSON mode
     ]
 
 
@@ -253,7 +281,7 @@ def test_grounding_ignores_small_bare_integers():
 
 
 def test_generate_narrative_runs_tools_then_returns_structured_prose(ctx):
-    client = FakeAnthropic(_script_full_run())
+    client = FakeGroq(_script_full_run())
 
     result = generate_narrative(ctx, client=client)
 
@@ -266,20 +294,39 @@ def test_generate_narrative_runs_tools_then_returns_structured_prose(ctx):
         "get_bearing_frequency_match",
         "measure_spectral_band_energy",
     ]
-    # usage accumulates across every round-trip, not just the last one
-    assert result.input_tokens == 300
-    assert result.output_tokens == 150
+    # Usage accumulates across every round-trip, not just the last one:
+    # 3 phase-1 turns + 1 phase-2 JSON turn, at 100 in / 50 out each.
+    assert result.input_tokens == 400
+    assert result.output_tokens == 200
 
 
 def test_generate_narrative_uses_the_configured_model_and_tools(ctx):
-    client = FakeAnthropic(_script_full_run())
+    client = FakeGroq(_script_full_run())
 
     generate_narrative(ctx, client=client)
 
-    first = client.messages.calls[0]
-    assert first["model"] == DEFAULT_MODEL == "claude-sonnet-5"
-    assert [t["name"] for t in first["tools"]] == [t["name"] for t in TOOL_DEFINITIONS]
-    assert first["output_config"]["format"]["type"] == "json_schema"
+    first = client.calls[0]
+    assert first["model"] == DEFAULT_MODEL == "openai/gpt-oss-120b"
+    assert [t["function"]["name"] for t in first["tools"]] == [t["name"] for t in TOOL_DEFINITIONS]
+
+
+def test_json_mode_is_never_combined_with_tools(ctx):
+    """Groq rejects that pairing with a 400, so the loop must keep them apart.
+
+    Confirmed against the live API: `json mode cannot be combined with
+    tool/function calling`. This pins the two-phase shape that works around it.
+    """
+    client = FakeGroq(_script_full_run())
+
+    generate_narrative(ctx, client=client)
+
+    for call in client.calls:
+        assert not ("tools" in call and "response_format" in call), (
+            "a single request carried both tools and response_format; Groq 400s on that"
+        )
+    # the last call is the JSON one, and it carries no tools
+    assert client.calls[-1]["response_format"] == {"type": "json_object"}
+    assert "tools" not in client.calls[-1]
 
 
 def test_prompt_carries_no_measurements(ctx):
@@ -289,10 +336,10 @@ def test_prompt_carries_no_measurements(ctx):
     defect frequency -- otherwise it could quote one straight from the prompt
     and the check below would never fire.
     """
-    client = FakeAnthropic(_script_full_run())
+    client = FakeGroq(_script_full_run())
     generate_narrative(ctx, client=client)
 
-    prompt = client.messages.calls[0]["messages"][0]["content"]
+    prompt = client.calls[0]["messages"][1]["content"]  # [0] is the system prompt
     stats = get_signal_statistics(ctx)
     risk = get_risk_assessment(ctx)
     for value in (stats["rms_g"], stats["peak_to_peak_g"], risk["risk_score"]):
@@ -301,27 +348,18 @@ def test_prompt_carries_no_measurements(ctx):
 
 def test_tool_errors_are_returned_to_the_model_not_raised(ctx):
     """An inverted band must come back as an is_error tool_result, not a 500."""
-    client = FakeAnthropic(
+    client = FakeGroq(
         [
-            FakeResponse(
-                content=[
-                    FakeToolUse(
-                        "measure_spectral_band_energy",
-                        {"low_hz": 500.0, "high_hz": 100.0},
-                        id="t1",
-                    )
-                ],
-                stop_reason="tool_use",
-            ),
-            FakeResponse(content=[FakeText(FINAL_JSON)]),
+            tool_turn(("measure_spectral_band_energy", {"low_hz": 500.0, "high_hz": 100.0})),
+            text_turn("done"),
+            text_turn(FINAL_JSON),
         ]
     )
 
     result = generate_narrative(ctx, client=client)
 
-    sent_back = client.messages.calls[1]["messages"][2]["content"][0]
-    assert sent_back["is_error"] is True
-    assert "greater than" in sent_back["content"]
+    tool_message = next(m for m in client.calls[1]["messages"] if m.get("role") == "tool")
+    assert "greater than" in tool_message["content"]
     # and the failed call is still recorded in the audit trail
     assert result.tool_calls[0]["tool"] == "measure_spectral_band_energy"
 
@@ -336,13 +374,11 @@ def test_generate_narrative_records_ungrounded_numbers_without_failing(ctx):
             "corroboration": "weak",
         }
     )
-    client = FakeAnthropic(
+    client = FakeGroq(
         [
-            FakeResponse(
-                content=[FakeToolUse("get_signal_statistics", {}, id="t1")],
-                stop_reason="tool_use",
-            ),
-            FakeResponse(content=[FakeText(invented)]),
+            tool_turn(("get_signal_statistics", {})),
+            text_turn("done"),
+            text_turn(invented),
         ]
     )
 
@@ -351,26 +387,38 @@ def test_generate_narrative_records_ungrounded_numbers_without_failing(ctx):
     assert "9999.77" in result.ungrounded_numbers
 
 
-def test_generate_narrative_raises_on_refusal(ctx):
-    @dataclass
-    class Details:
-        category: str = "cyber"
-
-    client = FakeAnthropic(
-        [FakeResponse(content=[], stop_reason="refusal", stop_details=Details())]
-    )
-    with pytest.raises(RuntimeError, match="declined"):
+def test_invalid_json_from_the_model_is_a_clear_error(ctx):
+    """JSON mode guarantees valid JSON, but a stubborn model can still drift."""
+    client = FakeGroq([text_turn("done"), text_turn("not json at all")])
+    with pytest.raises(RuntimeError, match="did not return valid JSON"):
         generate_narrative(ctx, client=client)
 
 
+def test_json_missing_a_required_key_is_rejected(ctx):
+    """JSON mode does not enforce a schema, so the keys are checked here."""
+    partial = json.dumps({"diagnosis_narrative": "x", "corroboration": "weak"})
+    client = FakeGroq([text_turn("done"), text_turn(partial)])
+    with pytest.raises(RuntimeError, match="missing required keys"):
+        generate_narrative(ctx, client=client)
+
+
+def test_an_unexpected_corroboration_value_degrades_to_weak(ctx):
+    """Better a conservative label than a 500 on an unconstrained string."""
+    odd = json.dumps(
+        {
+            "diagnosis_narrative": "a",
+            "maintenance_recommendation": "b",
+            "evidence_cited": [],
+            "corroboration": "VERY STRONG!!",
+        }
+    )
+    client = FakeGroq([text_turn("done"), text_turn(odd)])
+    assert generate_narrative(ctx, client=client).corroboration == "weak"
+
+
 def test_generate_narrative_gives_up_rather_than_looping_forever(ctx):
-    forever = [
-        FakeResponse(
-            content=[FakeToolUse("get_signal_statistics", {}, id="t1")], stop_reason="tool_use"
-        )
-        for _ in range(MAX_TOOL_ITERATIONS + 2)
-    ]
-    client = FakeAnthropic(forever)
+    forever = [tool_turn(("get_signal_statistics", {})) for _ in range(MAX_TOOL_ITERATIONS + 2)]
+    client = FakeGroq(forever)
     with pytest.raises(RuntimeError, match="did not converge"):
         generate_narrative(ctx, client=client)
 
@@ -379,11 +427,11 @@ def test_get_client_without_a_key_explains_itself(monkeypatch):
     import fleetmind.agents.llm as llm_module
 
     class NoKeySettings:
-        anthropic_api_key = None
-        anthropic_model = DEFAULT_MODEL
+        groq_api_key = None
+        groq_model = DEFAULT_MODEL
 
     monkeypatch.setattr(llm_module, "get_settings", lambda: NoKeySettings())
-    with pytest.raises(LLMNotConfigured, match="ANTHROPIC_API_KEY"):
+    with pytest.raises(LLMNotConfigured, match="GROQ_API_KEY"):
         get_client()
 
 
@@ -410,7 +458,7 @@ def patched_llm(monkeypatch):
         calls.append(context.service_request_id)
         from fleetmind.agents.llm import generate_narrative as real
 
-        return real(context, client=FakeAnthropic(_script_full_run()))
+        return real(context, client=FakeGroq(_script_full_run()))
 
     monkeypatch.setattr(router_module, "generate_narrative", fake_generate)
     return calls
@@ -435,7 +483,7 @@ def test_post_generates_and_get_returns_the_cached_narrative(
     assert body["model"] == DEFAULT_MODEL
     assert body["corroboration"] == "weak"
     assert len(body["tool_calls"]) == 4
-    assert body["input_tokens"] == 300
+    assert body["input_tokens"] == 400
 
     fetched = product_client.get(f"/service-requests/{rid}/narrative").json()
     assert fetched["cached"] is True
@@ -490,12 +538,12 @@ def test_narrative_without_an_api_key_is_503_not_500(product_client, product_ses
     import fleetmind.agents.llm as llm_module
 
     class NoKeySettings:
-        anthropic_api_key = None
-        anthropic_model = DEFAULT_MODEL
+        groq_api_key = None
+        groq_model = DEFAULT_MODEL
 
     monkeypatch.setattr(llm_module, "get_settings", lambda: NoKeySettings())
 
     resp = product_client.post(f"/service-requests/{rid}/narrative")
 
     assert resp.status_code == 503
-    assert "ANTHROPIC_API_KEY" in resp.json()["detail"]
+    assert "GROQ_API_KEY" in resp.json()["detail"]

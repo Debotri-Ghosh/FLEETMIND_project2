@@ -251,6 +251,26 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
 ]
 
+
+def openai_tool_definitions() -> list[dict[str, Any]]:
+    """The same tools in OpenAI/Groq function-calling shape.
+
+    Derived from TOOL_DEFINITIONS rather than written twice, so the schema a
+    model is shown can never drift from the one `run_tool` validates against.
+    """
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["input_schema"],
+            },
+        }
+        for t in TOOL_DEFINITIONS
+    ]
+
+
 _DISPATCH: dict[str, Callable[..., dict[str, Any]]] = {
     "get_signal_statistics": get_signal_statistics,
     "get_risk_assessment": get_risk_assessment,

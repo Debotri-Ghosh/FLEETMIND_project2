@@ -1,7 +1,7 @@
 """The one genuinely LLM-driven step in FleetMind.
 
 Everything else in `agents/` is deterministic rule-based Python. This module
-adds a real Claude call on top of it: the model is given no raw signal and no
+adds a real model call on top of it: the model is given no raw signal and no
 freedom to compute, only four callable tools (`agents/tools.py`) that return
 numbers the existing rule-based code produced. Its job is to reason over those
 numbers and write the two pieces of prose a technician actually reads -- a
@@ -15,9 +15,20 @@ originates a figure. The system prompt forbids it, the tools are the only
 source of numbers, and the structured output is checked against the tool
 results before anything is stored (`verify_numbers_are_grounded`).
 
-Model: `claude-sonnet-5`, chosen by the project owner. Generated on demand per
-service request and cached in `llm_narratives`, so a demo costs one call per
-flagged machine rather than one per page view.
+**Provider: Groq** (`openai/gpt-oss-120b` by default), chosen by the project
+owner because that is the API key available. An earlier version of this module
+targeted Claude via the Anthropic SDK; the grounding design is unchanged and
+provider-independent, but the call shape is not, hence the rewrite.
+
+One Groq-specific constraint shapes the loop below: **JSON mode and tool
+calling cannot be combined** -- the API returns `400 json mode cannot be
+combined with tool/function calling`. So the conversation runs in two phases:
+tools first with no `response_format`, then one final tool-free call with
+`response_format={"type": "json_object"}` to collect the structured answer.
+Verified against the live API, not assumed.
+
+Generated on demand per service request and cached in `llm_narratives`, so a
+demo costs one call per flagged machine rather than one per page view.
 """
 
 from __future__ import annotations
@@ -28,12 +39,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from fleetmind.agents.tools import TOOL_DEFINITIONS, EvidenceContext, run_tool
+from fleetmind.agents.tools import EvidenceContext, openai_tool_definitions, run_tool
 from fleetmind.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "claude-sonnet-5"
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 MAX_TOKENS = 4000
 # Four tools, and the band-energy one is worth a couple of probes. Anything
 # past this is a loop, not reasoning.
@@ -60,9 +71,12 @@ is NOT to redo that analysis. Your job is to explain it, in the plain prose a \
 maintenance planner and a field technician can act on.
 
 Hard rules:
-1. Every number you state must come from a tool result in this conversation. \
-Never estimate, round differently, extrapolate or invent a figure. If you want \
-a number you do not have, call a tool for it.
+1. Every number you state must come from a tool result in this conversation, \
+quoted exactly as the tool returned it. Never estimate, round differently, \
+extrapolate or invent a figure. In particular do NOT restate a value in another \
+unit or as a percentage -- writing "0.0325%" for a returned 0.000325 is \
+originating a number, which is not yours to do; quote the 0.000325 and describe \
+it in words instead. If you want a number you do not have, call a tool for it.
 2. Do not contradict the risk score or urgency from get_risk_assessment. You \
 may explain them; you may not revise them.
 3. The characteristic defect frequencies are bearing geometry, not an \
@@ -80,45 +94,32 @@ Call the tools first, then answer. Write for a competent technician: concrete, \
 unhedged about what the data says, explicit about what it does not say.\
 """
 
-OUTPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "diagnosis_narrative": {
-            "type": "string",
-            "description": (
-                "2-4 sentences explaining what the signal shows and what fault "
-                "it points to, citing the tool-supplied figures."
-            ),
-        },
-        "maintenance_recommendation": {
-            "type": "string",
-            "description": (
-                "2-4 sentences: what to do, in what timeframe, and what to "
-                "check or bring. Must match the urgency from get_risk_assessment."
-            ),
-        },
-        "evidence_cited": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Each figure relied on, as 'name = value unit'.",
-        },
-        "corroboration": {
-            "type": "string",
-            "enum": ["strong", "partial", "weak", "none"],
-            "description": (
-                "How well spectral energy supports the predicted defect "
-                "frequency. 'none' when there is no defect frequency (Normal)."
-            ),
-        },
-    },
-    "required": [
-        "diagnosis_narrative",
-        "maintenance_recommendation",
-        "evidence_cited",
-        "corroboration",
-    ],
-    "additionalProperties": False,
+# Phase 2 of the loop. The shape is spelled out as prose because Groq's JSON
+# mode guarantees *valid JSON*, not JSON matching a schema -- so it has to be
+# stated here and validated on our side in `_parse_final`.
+FINAL_INSTRUCTION = """\
+Now write the finding. Reply with ONLY a JSON object, no prose around it, with \
+exactly these keys:
+
+{
+  "diagnosis_narrative": "2-4 sentences: what the signal shows and what fault it points to, citing the tool-supplied figures.",
+  "maintenance_recommendation": "2-4 sentences: what to do, in what timeframe, and what to check or bring. Must match the urgency from get_risk_assessment.",
+  "evidence_cited": ["each figure you relied on, as 'name = value unit'"],
+  "corroboration": "one of: strong | partial | weak | none"
 }
+
+Use "none" for corroboration only when there is no defect frequency to check \
+against (a Normal prediction). Every number in your prose must have come from \
+a tool result.\
+"""
+
+REQUIRED_KEYS = (
+    "diagnosis_narrative",
+    "maintenance_recommendation",
+    "evidence_cited",
+    "corroboration",
+)
+VALID_CORROBORATION = {"strong", "partial", "weak", "none"}
 
 
 @dataclass
@@ -135,29 +136,29 @@ class NarrativeResult:
 
 
 def get_client(api_key: str | None = None):
-    """Build an Anthropic client, or explain why we cannot.
+    """Build a Groq client, or explain why we cannot.
 
     The key is read from `backend/.env` via Settings rather than relying on the
     SDK's own environment lookup, because every other backend command in this
     project is configured from that file.
     """
     try:
-        import anthropic
+        from groq import Groq
     except ImportError as exc:  # the `llm` extra was not installed
         raise LLMNotConfigured(
-            "The anthropic SDK is not installed. Run "
+            "The groq SDK is not installed. Run "
             '`pip install -e ".[llm]"` from backend/ to enable narrative '
             "generation; the rule-based decision layer works without it."
         ) from exc
 
-    key = api_key or get_settings().anthropic_api_key
+    key = api_key or get_settings().groq_api_key
     if not key:
         raise LLMNotConfigured(
-            "ANTHROPIC_API_KEY is not set. Add it to backend/.env to enable "
-            "LLM narrative generation; the rule-based decision layer works "
+            "GROQ_API_KEY is not set. Add it to backend/.env to enable LLM "
+            "narrative generation; the rule-based decision layer works "
             "without it."
         )
-    return anthropic.Anthropic(api_key=key)
+    return Groq(api_key=key)
 
 
 def _user_prompt(ctx: EvidenceContext) -> str:
@@ -221,97 +222,147 @@ def verify_numbers_are_grounded(
     return ungrounded
 
 
+def _usage(response: Any) -> tuple[int, int]:
+    usage = getattr(response, "usage", None)
+    return (
+        getattr(usage, "prompt_tokens", 0) or 0,
+        getattr(usage, "completion_tokens", 0) or 0,
+    )
+
+
 def generate_narrative(
     ctx: EvidenceContext,
     client: Any | None = None,
     model: str | None = None,
 ) -> NarrativeResult:
-    """Run the tool-use loop and return the model's grounded write-up.
+    """Run the tool loop, then collect the structured write-up.
 
-    A manual loop rather than the SDK's beta tool runner: every tool here is
-    bound to one `EvidenceContext`, and we want the full call-and-result trail
-    persisted for audit, which the manual loop hands us directly.
+    A manual loop rather than an agent framework: every tool here is bound to
+    one `EvidenceContext`, and we want the full call-and-result trail persisted
+    for audit, which the manual loop hands us directly.
     """
     settings = get_settings()
     client = client if client is not None else get_client()
-    model = model or settings.anthropic_model or DEFAULT_MODEL
+    model = model or settings.groq_model or DEFAULT_MODEL
+    tools = openai_tool_definitions()
 
-    messages: list[dict[str, Any]] = [{"role": "user", "content": _user_prompt(ctx)}]
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": _user_prompt(ctx)},
+    ]
     trail: list[dict[str, Any]] = []
     raw_results: list[str] = []
     input_tokens = output_tokens = 0
 
+    # ── phase 1: let the model gather its figures ──────────────────────
     for _ in range(MAX_TOOL_ITERATIONS):
-        response = client.messages.create(
+        response = client.chat.completions.create(
             model=model,
-            max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            tools=TOOL_DEFINITIONS,
-            thinking={"type": "adaptive"},
-            output_config={
-                "effort": "medium",
-                "format": {
-                    "type": "json_schema",
-                    "schema": OUTPUT_SCHEMA,
-                },
-            },
             messages=messages,
+            tools=tools,
+            max_tokens=MAX_TOKENS,
         )
-        input_tokens += getattr(response.usage, "input_tokens", 0) or 0
-        output_tokens += getattr(response.usage, "output_tokens", 0) or 0
+        used_in, used_out = _usage(response)
+        input_tokens += used_in
+        output_tokens += used_out
 
-        if response.stop_reason == "refusal":
-            raise RuntimeError(
-                "Claude declined to answer "
-                f"({getattr(response.stop_details, 'category', 'unknown')})."
-            )
+        message = response.choices[0].message
+        tool_calls = list(message.tool_calls or [])
 
-        tool_uses = [b for b in response.content if b.type == "tool_use"]
-        if not tool_uses:
-            return _parse_final(response, model, trail, raw_results, input_tokens, output_tokens)
+        if not tool_calls:
+            messages.append({"role": "assistant", "content": message.content or ""})
+            break
 
-        messages.append({"role": "assistant", "content": response.content})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": message.content or "",
+                "tool_calls": [
+                    {
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.function.name,
+                            "arguments": call.function.arguments,
+                        },
+                    }
+                    for call in tool_calls
+                ],
+            }
+        )
 
-        tool_results: list[dict[str, Any]] = []
-        for block in tool_uses:
-            # Tool inputs arrive as parsed JSON; never string-match them.
-            arguments = dict(block.input or {})
+        for call in tool_calls:
+            name = call.function.name
+            # Arguments arrive as a JSON string; parse, never string-match.
             try:
-                result = run_tool(ctx, block.name, arguments)
+                arguments = json.loads(call.function.arguments or "{}")
+            except json.JSONDecodeError:
+                arguments = {}
+            try:
+                result = run_tool(ctx, name, arguments)
                 is_error = False
             except (KeyError, TypeError, ValueError) as exc:
-                result = f"Error running {block.name}: {exc}"
+                result = f"Error running {name}: {exc}"
                 is_error = True
-            trail.append({"tool": block.name, "input": arguments, "result": result})
+
+            trail.append({"tool": name, "input": arguments, "result": result})
             if not is_error:
                 raw_results.append(result)
-            tool_results.append(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": result,
-                    **({"is_error": True} if is_error else {}),
-                }
-            )
-        messages.append({"role": "user", "content": tool_results})
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+    else:
+        raise RuntimeError(
+            f"Narrative generation did not converge within {MAX_TOOL_ITERATIONS} tool rounds."
+        )
 
-    raise RuntimeError(
-        f"Narrative generation did not converge within {MAX_TOOL_ITERATIONS} tool rounds."
+    # ── phase 2: structured answer, no tools ───────────────────────────
+    # Groq rejects `response_format` alongside `tools` (400: "json mode cannot
+    # be combined with tool/function calling"), so the shape is collected in a
+    # separate tool-free call. The tool results are already in `messages`.
+    messages.append({"role": "user", "content": FINAL_INSTRUCTION})
+    final = client.chat.completions.create(
+        model=model,
+        messages=messages,
+        response_format={"type": "json_object"},
+        max_tokens=MAX_TOKENS,
+    )
+    used_in, used_out = _usage(final)
+    input_tokens += used_in
+    output_tokens += used_out
+
+    return _parse_final(
+        final.choices[0].message.content,
+        model,
+        trail,
+        raw_results,
+        input_tokens,
+        output_tokens,
     )
 
 
 def _parse_final(
-    response: Any,
+    text: str | None,
     model: str,
     trail: list[dict[str, Any]],
     raw_results: list[str],
     input_tokens: int,
     output_tokens: int,
 ) -> NarrativeResult:
-    text = next((b.text for b in response.content if b.type == "text"), None)
     if not text:
-        raise RuntimeError("Claude returned no text block to parse a narrative from.")
-    data = json.loads(text)
+        raise RuntimeError("The model returned no content to parse a narrative from.")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"The model did not return valid JSON: {exc}") from exc
+
+    # JSON mode guarantees valid JSON, not the right keys -- check ourselves.
+    missing = [key for key in REQUIRED_KEYS if key not in data]
+    if missing:
+        raise RuntimeError(f"Narrative JSON is missing required keys: {missing}")
+
+    corroboration = str(data["corroboration"]).strip().lower()
+    if corroboration not in VALID_CORROBORATION:
+        logger.warning("unexpected corroboration value %r; storing as 'weak'", corroboration)
+        corroboration = "weak"
 
     prose = f"{data['diagnosis_narrative']} {data['maintenance_recommendation']}"
     ungrounded = verify_numbers_are_grounded(prose, raw_results)
@@ -322,11 +373,15 @@ def _parse_final(
             ungrounded,
         )
 
+    evidence = data.get("evidence_cited") or []
+    if isinstance(evidence, str):
+        evidence = [evidence]
+
     return NarrativeResult(
-        diagnosis_narrative=data["diagnosis_narrative"],
-        maintenance_recommendation=data["maintenance_recommendation"],
-        evidence_cited=list(data.get("evidence_cited") or []),
-        corroboration=data["corroboration"],
+        diagnosis_narrative=str(data["diagnosis_narrative"]),
+        maintenance_recommendation=str(data["maintenance_recommendation"]),
+        evidence_cited=[str(item) for item in evidence],
+        corroboration=corroboration,
         model=model,
         tool_calls=trail,
         input_tokens=input_tokens,

@@ -494,7 +494,7 @@ const CORROBORATION_STYLE: Record<string, string> = {
   none: "bg-slate-200 text-slate-700",
 };
 
-/** Claude's write-up of one AI-filed request.
+/** The LLM's write-up of one AI-filed request.
  *
  * Generation is an explicit button press, not an automatic fetch on expand:
  * it costs a real API call. Once generated the result is cached server-side,
@@ -534,7 +534,7 @@ export function NarrativePanel({ requestId }: { requestId: number }) {
   return (
     <div>
       <div className="mb-1 flex flex-wrap items-center gap-3">
-        <h4 className="text-sm font-semibold">Engineer&apos;s write-up (Claude)</h4>
+        <h4 className="text-sm font-semibold">Engineer&apos;s write-up (LLM)</h4>
         {narrative && (
           <span
             className={`rounded px-2 py-0.5 text-xs font-medium ${
