@@ -321,3 +321,27 @@ Verified the right way the second time — captured raw stdout+stderr instead of
 4. **The literature review.** The header pointed at `FleetMind_Literature_Review.md` "in the project docs" for the dataset-selection rationale and paper-to-subsystem mapping. That file is absent from the working tree and from **all 44 commits**. Replaced with a `## Project documentation` index of the files that *do* exist (implementation report, README, DEMO_SCRIPT, `start-demo.ps1`, ADRs, audit) plus an explicit note that the literature review does not exist, is outstanding work rather than a missing file, and **must not be cited or reconstructed from guesswork**.
 
 Re-audited after the edit: zero occurrences of each stale string, the doc index present, and `DEMO_SCRIPT.md` / `scripts/start-demo.ps1` — both new and both previously unmentioned in the header — now discoverable from it.
+
+2026-10-03 — Slice O (items 7 + 8) — final verification gate, and the system left demo-ready — verified via every check run individually with its real output shown, then an **independent** health check of the final state rather than trusting the startup script's own report — result: pass, all seven checks clean.
+
+| Check | Result |
+|---|---|
+| `pytest` | **259 passed** (257 + the 2 replay-counter tests from item 3) |
+| `ruff check .` | All checks passed! |
+| `ruff format --check .` | 92 files already formatted |
+| `mypy fleetmind` | Success: no issues found in 64 source files |
+| `npx tsc --noEmit` | clean |
+| `npm run build` | clean, 5 routes, all prerendered static |
+| `docker compose config` | resolves cleanly — postgres, adminer, api, frontend, migrate |
+
+The production build was run **only after stopping the dev server and clearing `.next`**, per the lesson from the Slice D wrap-up (a production build beside a live dev server corrupts the dev asset manifests and every page 404s its own JS).
+
+**Item 8 — final state, verified independently.** The demo was brought up with `scripts/start-demo.ps1` (so the script itself got a third real end-to-end run, clean), then checked with commands that do not go through it:
+
+- Ports 8000 and 3000 both listening.
+- `GET /livez` → `200 {"status":"alive"}` **without a token**; `GET /health` → **401 without a token** and `{"status":"ok","database":"connected","version":"0.1.0"}` with one — confirming the Slice H decision that even the health endpoint is authenticated and only the liveness probe is open.
+- Frontend `/login` → 200.
+- `/replay/status`: `released 0/4367, processed 0, pending 0, complete false, running false, ticks 0` — a genuinely clean zero, including the tick counter fixed in item 3.
+- Database: **equipment 8 active / 0 maintenance**, predictions 0, decisions 0, AI requests 0, users 5. Exactly the pre-replay state, with the five demo logins intact.
+
+The system is ready for a live run: open the Dashboard, press **Start live replay**, and the automation becomes visible within about three seconds.
