@@ -103,3 +103,66 @@ def test_evidence_explains_why_a_customer_filed_request_has_none(product_client)
     detail = resp.json()["detail"]
     assert "no agent decision" in detail
     assert "customer-filed" in detail
+
+
+# ── ground truth vs prediction (Slice K) ───────────────────────────────
+
+
+def test_evidence_carries_the_documented_ground_truth_separately(product_client, product_session):
+    """The dataset's own label travels beside the prediction, not merged with it.
+
+    The UI puts these in two visually distinct panels so a reviewer can see the
+    model was blind to the label; that is only possible if the API keeps them
+    as separate fields rather than reporting one 'the fault is X'.
+    """
+    rid = _ai_request_id(product_client, product_session)
+
+    body = product_client.get(f"/service-requests/{rid}/evidence").json()
+
+    # documented by CWRU
+    assert body["documented_fault_type"] == "InnerRace"
+    assert body["documented_fault_diameter_in"] == 0.007
+    assert body["documented_window_label"] == "InnerRace"
+    assert body["sensor_position"] == "DE"
+    assert body["site_load_hp"] == 0
+    assert body["source_file"].endswith(".mat")
+
+    # predicted by the model, independently
+    assert body["predicted_label"] == "InnerRace"
+    assert body["model_confidence"] == 0.9
+
+    # and the comparison the panel renders
+    assert body["prediction_matches_documented"] is True
+
+
+def test_agreement_flag_is_false_when_the_model_disagrees(product_client, product_session):
+    """The honest case: the model is wrong and the panel must say so."""
+    from fleetmind.db.models import ModelPrediction
+
+    rid = _ai_request_id(product_client, product_session)
+    prediction = product_session.query(ModelPrediction).first()
+    prediction.predicted_label = "OuterRace"  # documented label is InnerRace
+    product_session.commit()
+
+    body = product_client.get(f"/service-requests/{rid}/evidence").json()
+
+    assert body["documented_fault_type"] == "InnerRace"
+    assert body["predicted_label"] == "OuterRace"
+    assert body["prediction_matches_documented"] is False
+
+
+def test_agreement_ignores_the_diagnostic_agents_qualifier(product_client, product_session):
+    """'InnerRace (unconfirmed — low signal energy)' is still InnerRace.
+
+    The qualifier is a confidence note, not a different class, so comparing the
+    whole string would report a disagreement that did not happen.
+    """
+    from fleetmind.db.models import ModelPrediction
+
+    rid = _ai_request_id(product_client, product_session)
+    prediction = product_session.query(ModelPrediction).first()
+    prediction.predicted_label = "InnerRace (unconfirmed — low signal energy)"
+    product_session.commit()
+
+    body = product_client.get(f"/service-requests/{rid}/evidence").json()
+    assert body["prediction_matches_documented"] is True

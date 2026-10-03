@@ -73,13 +73,13 @@ function LoginForm() {
     <main className="mx-auto flex max-w-md flex-col gap-6 px-6 py-16">
       <div>
         <h1 className="text-2xl font-bold">FleetMind</h1>
-        <p className="text-sm text-slate-600">
+        <p className="text-sm text-ink-2">
           Sign in to continue. What you can see depends on your role, and the
           restriction is enforced by the API — not by hiding buttons.
         </p>
       </div>
 
-      <form onSubmit={onSubmit} className="space-y-3 rounded-lg border bg-white p-5">
+      <form onSubmit={onSubmit} className="space-y-3 rounded-lg border border-hair bg-panel p-5">
         <label className="block text-sm">
           <span className="mb-1 block font-medium">Email</span>
           <input
@@ -87,7 +87,7 @@ function LoginForm() {
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded border border-slate-300 px-3 py-2"
+            className="w-full rounded border border-hair-strong px-3 py-2"
             autoComplete="username"
           />
         </label>
@@ -98,13 +98,13 @@ function LoginForm() {
             required
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded border border-slate-300 px-3 py-2"
+            className="w-full rounded border border-hair-strong px-3 py-2"
             autoComplete="current-password"
           />
         </label>
 
         {error && (
-          <p role="alert" className="rounded bg-red-50 p-2 text-sm text-red-700">
+          <p role="alert" className="rounded border border-crit/40 bg-crit/10 p-2 text-sm text-crit">
             {error}
           </p>
         )}
@@ -112,15 +112,15 @@ function LoginForm() {
         <button
           type="submit"
           disabled={busy}
-          className="w-full rounded bg-blue-600 px-3 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          className="w-full rounded bg-accent px-3 py-2 font-medium text-canvas hover:brightness-110 disabled:opacity-50"
         >
           {busy ? "Signing in…" : "Sign in"}
         </button>
       </form>
 
-      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
+      <div className="rounded-lg border border-hair bg-panel-sunken p-4 text-sm">
         <p className="mb-2 font-medium">Demo logins</p>
-        <p className="mb-3 text-xs text-slate-600">
+        <p className="mb-3 text-xs text-ink-2">
           These are seeded demo accounts with published passwords, so a reviewer
           can sign in as each role and check that the restrictions are real.
           The two operators sit at <em>different</em> sites on purpose.
@@ -134,7 +134,7 @@ function LoginForm() {
                   setEmail(demo.email);
                   setPassword(demo.password);
                 }}
-                className="text-left text-blue-700 hover:underline"
+                className="text-left text-accent hover:underline"
               >
                 {demo.label}
               </button>
@@ -149,7 +149,7 @@ function LoginForm() {
 export default function LoginPage() {
   // useSearchParams needs a Suspense boundary for the static export.
   return (
-    <Suspense fallback={<main className="px-8 py-16 text-slate-500">Loading…</main>}>
+    <Suspense fallback={<main className="px-8 py-16 text-ink-3">Loading…</main>}>
       <LoginForm />
     </Suspense>
   );

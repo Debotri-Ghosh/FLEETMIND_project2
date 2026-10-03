@@ -148,6 +148,31 @@ class EvidencePackage(BaseModel):
     risk_score: float | None = None
     decision_text: str | None = None
 
+    # ── ground truth, kept deliberately separate from the prediction ──
+    #
+    # These come from the CWRU dataset's own documentation of the recording --
+    # the fault the researchers machined into the bearing before running the
+    # rig. The classifier never sees them. They are carried here so the UI can
+    # put "documented by the dataset creators" beside "predicted by our model,
+    # blind to the label" and let a reviewer compare the two directly, which is
+    # the only way to show the prediction is independent rather than assert it.
+    documented_fault_type: str = Field(
+        description="Fault the CWRU researchers machined into this bearing."
+    )
+    documented_fault_diameter_in: float | None = Field(
+        default=None, description="Machined defect diameter in inches, per CWRU."
+    )
+    documented_window_label: str = Field(
+        description="The signal window's own stored ground-truth label."
+    )
+    sensor_position: str = Field(description="DE (drive end) or FE (fan end).")
+    site_load_hp: int = Field(description="Motor load in HP for this recording.")
+    nominal_rpm: int | None = None
+    source_file: str = Field(description="The CWRU .mat file this came from.")
+    prediction_matches_documented: bool = Field(
+        description="True when the model's class equals the documented one."
+    )
+
 
 class ReplayStatusResponse(BaseModel):
     """Progress of the simulated sensor feed over the static CWRU archive."""
@@ -364,3 +389,32 @@ class TokenResponse(BaseModel):
     token_type: Literal["bearer"] = "bearer"
     expires_in_minutes: int
     user: CurrentUser
+
+
+class WindowSpectrum(BaseModel):
+    """A window's waveform and its Fourier transform, for the Frequency Lab.
+
+    Both halves describe the *same* stored samples. The spectrum is computed
+    on request from `raw_values`; nothing additional is recorded or measured,
+    which is the point the UI is built to make visible."""
+
+    window_id: int
+    experiment_id: int
+    label: str = Field(description="Documented fault class for this recording.")
+    sampling_rate_hz: int
+    n_samples: int
+    duration_seconds: float
+
+    raw_values: list[float] = Field(description="The exact stored samples.")
+    spectrum_freqs_hz: list[float]
+    spectrum_magnitudes: list[float] = Field(
+        description="Raw FFT magnitudes — NOT the normalized tensor the CNN consumes."
+    )
+
+    matched_frequency: MatchedFrequency | None = None
+    all_characteristic_frequencies: dict[str, float]
+    band_energy_fraction: float | None = Field(
+        default=None,
+        description="Share of total spectral energy inside the matched defect band.",
+    )
+    overall_peak_hz: float | None = None

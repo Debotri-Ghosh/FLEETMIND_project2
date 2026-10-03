@@ -1,3 +1,239 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ============================================================================
+   FleetMind "instrument panel" theme.
+
+   One rule governs the accent: AMBER MEANS LIVE. --accent is used for the
+   replay worker running, a ticking counter, a row that just changed -- and
+   for nothing else. If amber appears anywhere static, that is a bug, because
+   a reviewer glancing at the screen should be able to read "something is
+   happening" from colour alone.
+
+   Every series colour below was produced by the dataviz validator against
+   these exact surfaces, not picked by eye:
+     categorical (4 fault classes) aqua -> blue -> orange -> violet
+       worst adjacent CVD dE 19.6, normal-vision dE 20.9, all >= 3:1 on both
+       --canvas and --panel.
+     comparison pair blue/orange: CVD dE 26.8.
+   Yellow is deliberately absent from the series palette so that amber can
+   mean "live" unambiguously. Re-run the validator before changing any of them.
+   ========================================================================= */
+
+:root {
+  color-scheme: dark;
+
+  /* surfaces */
+  --canvas: #0e1116;
+  --panel: #161a21;
+  --panel-raised: #1d222b;
+  --panel-sunken: #10141a;
+  --border: #272e39;
+  --border-strong: #38414f;
+
+  /* ink */
+  --text: #e8e6e1;
+  --text-secondary: #aeb4be;
+  --text-muted: #8a919c;
+
+  /* the one accent: live / active / just-changed */
+  --accent: #f2a33c;
+  --accent-dim: #8a5d1f;
+  --accent-wash: rgba(242, 163, 60, 0.12);
+
+  /* categorical series - validated, fixed order, never cycled */
+  --series-1: #199e70; /* Normal     */
+  --series-2: #3987e5; /* Ball       */
+  --series-3: #d95926; /* InnerRace  */
+  --series-4: #9085e9; /* OuterRace  */
+
+  /* comparison pair (local baseline vs federated) */
+  --compare-a: #3987e5;
+  --compare-b: #d95926;
+
+  /* status - reserved, never reused as a series colour, always with a label */
+  --status-good: #0ca30c;
+  --status-warn: #ec835a;
+  --status-critical: #d03b3b;
+
+  /* chart chrome - deliberately recessive */
+  --grid: #242a33;
+  --axis: #39414d;
+
+  --radius: 10px;
+  --shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.03) inset,
+    0 8px 24px -12px rgba(0, 0, 0, 0.8);
+}
+
+html,
+body {
+  background: var(--canvas);
+  color: var(--text);
+}
+
+body {
+  font-feature-settings: "cv05" 1, "ss01" 1;
+  /* A faint vertical gradient so the canvas reads as a surface with depth
+     rather than a flat fill -- the one piece of decoration in the theme. */
+  background-image: radial-gradient(
+    120% 80% at 50% -20%,
+    rgba(57, 135, 229, 0.07),
+    transparent 60%
+  );
+  background-attachment: fixed;
+}
+
+/* Numbers align in columns and never reflow as they tick. Applied by the
+   .tabular class and to every mono element. */
+.tabular,
+.font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── motion ───────────────────────────────────────────────────────────────
+   Nothing pops in or out; state changes animate. All of it is suppressed
+   under prefers-reduced-motion, including the live pulse -- the pulse is a
+   redundant cue (the text already says "live"), so removing it loses nothing.
+   ====================================================================== */
+
+@keyframes fm-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+}
+
+@keyframes fm-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(242, 163, 60, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(242, 163, 60, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(242, 163, 60, 0);
+  }
+}
+
+@keyframes fm-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fm-flash {
+  0% {
+    background-color: var(--accent-wash);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 2px 0 0 transparent;
+  }
+}
+
+@keyframes fm-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+.fm-pulse {
+  animation: fm-pulse 1.6s ease-in-out infinite;
+}
+.fm-ring {
+  animation: fm-ring 1.8s ease-out infinite;
+}
+.fm-rise {
+  animation: fm-rise 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+/* Marks a row whose value changed on the last tick. 2.2s is long enough to
+   notice without leaving the board permanently highlighted. */
+.fm-flash {
+  animation: fm-flash 2.2s ease-out both;
+}
+.fm-sweep::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 33%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(242, 163, 60, 0.28),
+    transparent
+  );
+  animation: fm-sweep 2.1s linear infinite;
+}
+
+/* Status and value changes ease rather than snap. */
+.fm-transition {
+  transition:
+    background-color 0.45s ease,
+    color 0.45s ease,
+    border-color 0.45s ease,
+    box-shadow 0.45s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-pulse,
+  .fm-ring,
+  .fm-rise,
+  .fm-flash,
+  .fm-sweep::after {
+    animation: none !important;
+  }
+  .fm-transition {
+    transition: none !important;
+  }
+  /* The live dot still needs to be distinguishable when it cannot pulse. */
+  .fm-pulse {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+/* ── chart overrides ─────────────────────────────────────────────────────
+   Recharts renders its own chrome; pull it back to the recessive tokens.
+   ====================================================================== */
+.recharts-cartesian-grid line {
+  stroke: var(--grid);
+}
+.recharts-cartesian-axis-line,
+.recharts-cartesian-axis-tick-line {
+  stroke: var(--axis);
+}
+.recharts-text {
+  fill: var(--text-muted);
+}
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: var(--panel-raised) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: 8px;
+  color: var(--text) !important;
+}
+
+::selection {
+  background: var(--accent-wash);
+}
+
+/* Focus is never removed, only restyled, so keyboard users keep the cue. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}

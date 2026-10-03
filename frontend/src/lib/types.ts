@@ -176,6 +176,32 @@ export interface EvidencePackage {
   diagnosis_confidence: number;
   risk_score: number | null;
   decision_text: string | null;
+
+  /** Documented by the CWRU dataset creators. The model never sees these. */
+  documented_fault_type: string;
+  documented_fault_diameter_in: number | null;
+  documented_window_label: string;
+  sensor_position: string;
+  site_load_hp: number;
+  nominal_rpm: number | null;
+  source_file: string;
+  prediction_matches_documented: boolean;
+}
+
+export interface WindowSpectrum {
+  window_id: number;
+  experiment_id: number;
+  label: string;
+  sampling_rate_hz: number;
+  n_samples: number;
+  duration_seconds: number;
+  raw_values: number[];
+  spectrum_freqs_hz: number[];
+  spectrum_magnitudes: number[];
+  matched_frequency: MatchedFrequency | null;
+  all_characteristic_frequencies: Record<string, number>;
+  band_energy_fraction: number | null;
+  overall_peak_hz: number | null;
 }
 
 export interface ReplayTick {

@@ -31,7 +31,7 @@ function EquipmentBrowser({
       <label className="text-sm">
         <span className="mr-2 font-medium">Site</span>
         <select
-          className="rounded border bg-white px-2 py-1"
+          className="rounded border border-hair bg-panel-raised px-2 py-1"
           value={depotId ?? ""}
           onChange={(e) =>
             onDepotChange(e.target.value === "" ? null : Number(e.target.value))
@@ -46,17 +46,17 @@ function EquipmentBrowser({
         </select>
       </label>
 
-      {equipment.isLoading && <p className="text-slate-500">Loading equipment…</p>}
+      {equipment.isLoading && <p className="text-ink-3">Loading equipment…</p>}
       {equipment.isError && (
         <ErrorRetry message="Failed to load equipment." onRetry={() => equipment.refetch()} />
       )}
       {equipment.data?.length === 0 && (
-        <p className="text-slate-500">No equipment found for this customer/site.</p>
+        <p className="text-ink-3">No equipment found for this customer/site.</p>
       )}
       {equipment.data && equipment.data.length > 0 && (
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b text-left text-slate-500">
+            <tr className="border-b text-left text-ink-3">
               <th className="py-2">Equipment</th>
               <th className="py-2">Type</th>
               <th className="py-2">Site</th>
@@ -136,7 +136,7 @@ function ServiceRequestForm({ customerId }: { customerId: number }) {
         <span className="mb-1 block font-medium">Equipment</span>
         <select
           required
-          className="w-full rounded border bg-white px-2 py-1"
+          className="w-full rounded border border-hair bg-panel-raised px-2 py-1"
           value={equipmentId}
           onChange={(e) => setEquipmentId(e.target.value === "" ? "" : Number(e.target.value))}
         >
@@ -155,7 +155,7 @@ function ServiceRequestForm({ customerId }: { customerId: number }) {
         <span className="mb-1 block font-medium">Title</span>
         <input
           required
-          className="w-full rounded border bg-white px-2 py-1"
+          className="w-full rounded border border-hair bg-panel-raised px-2 py-1"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="e.g. Unusual vibration noise"
@@ -165,7 +165,7 @@ function ServiceRequestForm({ customerId }: { customerId: number }) {
       <label className="block text-sm">
         <span className="mb-1 block font-medium">Description</span>
         <textarea
-          className="w-full rounded border bg-white px-2 py-1"
+          className="w-full rounded border border-hair bg-panel-raised px-2 py-1"
           rows={3}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
@@ -175,7 +175,7 @@ function ServiceRequestForm({ customerId }: { customerId: number }) {
       <label className="block text-sm">
         <span className="mb-1 block font-medium">Priority</span>
         <select
-          className="w-full rounded border bg-white px-2 py-1"
+          className="w-full rounded border border-hair bg-panel-raised px-2 py-1"
           value={priority}
           onChange={(e) => setPriority(e.target.value as ServiceRequestPriority)}
         >
@@ -194,7 +194,7 @@ function ServiceRequestForm({ customerId }: { customerId: number }) {
         {createRequest.isPending ? "Submitting…" : "File service request"}
       </button>
       {createRequest.isError && (
-        <p className="text-sm text-red-600">
+        <p className="text-sm text-crit">
           {createRequest.error instanceof ApiError && createRequest.error.status === 404
             ? `This equipment is no longer available (${createRequest.error.message}). The equipment list has been refreshed -- please re-select and try again.`
             : createRequest.error instanceof Error
@@ -212,18 +212,18 @@ function ServiceRequestTracker({ customerId }: { customerId: number }) {
     queryFn: () => api.serviceRequests({ customer_id: customerId }),
   });
 
-  if (requests.isLoading) return <p className="text-slate-500">Loading requests…</p>;
+  if (requests.isLoading) return <p className="text-ink-3">Loading requests…</p>;
   if (requests.isError)
     return (
       <ErrorRetry message="Failed to load requests." onRetry={() => requests.refetch()} />
     );
   if (!requests.data?.length)
-    return <p className="text-slate-500">No service requests filed yet.</p>;
+    return <p className="text-ink-3">No service requests filed yet.</p>;
 
   return (
     <table className="w-full text-sm">
       <thead>
-        <tr className="border-b text-left text-slate-500">
+        <tr className="border-b text-left text-ink-3">
           <th className="py-2">Title</th>
           <th className="py-2">Priority</th>
           <th className="py-2">Status</th>
@@ -240,7 +240,7 @@ function ServiceRequestTracker({ customerId }: { customerId: number }) {
             <td className="py-2">
               <StatusBadge status={r.status} />
             </td>
-            <td className="py-2 text-slate-500">
+            <td className="py-2 text-ink-3">
               {new Date(r.created_at).toLocaleString()}
             </td>
           </tr>
@@ -261,26 +261,26 @@ function CustomerPageContent() {
       <Nav />
       <main className="mx-auto max-w-6xl space-y-8 p-8">
         <header className="space-y-1">
-          <h1 className="text-3xl font-bold">Customer Portal</h1>
-          <p className="text-slate-600">
+          <h1 className="text-2xl font-semibold tracking-tight text-ink">Customer Portal</h1>
+          <p className="text-ink-2">
             Browse your equipment and file/track service requests. No login
             yet — pick a customer to simulate their view.
           </p>
         </header>
 
-        {customers.isLoading && <p className="text-slate-500">Loading customers…</p>}
+        {customers.isLoading && <p className="text-ink-3">Loading customers…</p>}
         {customers.isError && (
           <ErrorRetry message="Failed to load customers." onRetry={() => customers.refetch()} />
         )}
         {customers.isSuccess && customers.data.length === 0 && (
-          <p className="text-slate-500">No customers seeded yet.</p>
+          <p className="text-ink-3">No customers seeded yet.</p>
         )}
 
         {customers.isSuccess && customers.data.length > 0 && (
           <label className="block text-sm">
             <span className="mr-2 font-medium">Viewing as</span>
             <select
-              className="rounded border bg-white px-2 py-1"
+              className="rounded border border-hair bg-panel-raised px-2 py-1"
               value={activeCustomerId ?? ""}
               onChange={(e) => setCustomerId(Number(e.target.value))}
             >
@@ -295,8 +295,8 @@ function CustomerPageContent() {
 
         {activeCustomerId !== null && (
           <>
-            <section className="rounded-xl bg-white p-6 shadow">
-              <h2 className="mb-4 text-xl font-semibold">Your Equipment</h2>
+            <section className="rounded-panel border border-hair bg-panel p-6 shadow-panel">
+              <h2 className="mb-4 text-lg font-semibold text-ink">Your Equipment</h2>
               <EquipmentBrowser
                 customerId={activeCustomerId}
                 depotId={depotId}
@@ -304,13 +304,13 @@ function CustomerPageContent() {
               />
             </section>
 
-            <section className="rounded-xl bg-white p-6 shadow">
-              <h2 className="mb-4 text-xl font-semibold">File a Service Request</h2>
+            <section className="rounded-panel border border-hair bg-panel p-6 shadow-panel">
+              <h2 className="mb-4 text-lg font-semibold text-ink">File a Service Request</h2>
               <ServiceRequestForm customerId={activeCustomerId} />
             </section>
 
-            <section className="rounded-xl bg-white p-6 shadow">
-              <h2 className="mb-4 text-xl font-semibold">Your Service Requests</h2>
+            <section className="rounded-panel border border-hair bg-panel p-6 shadow-panel">
+              <h2 className="mb-4 text-lg font-semibold text-ink">Your Service Requests</h2>
               <ServiceRequestTracker customerId={activeCustomerId} />
             </section>
           </>

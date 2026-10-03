@@ -269,6 +269,17 @@ def get_evidence(
         diagnosis_confidence=diagnostic["diagnosis_confidence"],
         risk_score=decision.risk_score,
         decision_text=decision.decision_text,
+        documented_fault_type=experiment.fault_type,
+        documented_fault_diameter_in=experiment.fault_diameter_in,
+        documented_window_label=window.label,
+        sensor_position=experiment.sensor_position,
+        site_load_hp=depot.load_hp,
+        nominal_rpm=depot.nominal_rpm,
+        source_file=experiment.source_file,
+        # Compared on the base class only: the diagnostic agent may append a
+        # qualifier such as "(unconfirmed - low signal energy)", which is a
+        # confidence note rather than a different class.
+        prediction_matches_documented=(prediction.predicted_label.split(" ")[0] == window.label),
     )
 
 

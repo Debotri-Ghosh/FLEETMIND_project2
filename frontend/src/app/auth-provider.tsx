@@ -119,14 +119,14 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   if (loading) {
     return (
       <main className="mx-auto max-w-6xl px-8 py-10">
-        <p className="text-slate-500">Checking your session…</p>
+        <p className="text-ink-3">Checking your session…</p>
       </main>
     );
   }
   if (!user || !canOpen(user, pathname)) {
     return (
       <main className="mx-auto max-w-6xl px-8 py-10">
-        <p className="text-slate-500">Redirecting…</p>
+        <p className="text-ink-3">Redirecting…</p>
       </main>
     );
   }

@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+
 import { api } from "@/lib/api";
 import { RequireAuth } from "./auth-provider";
 import {
@@ -10,14 +11,42 @@ import {
   ModelAccuracyChart,
   Nav,
   ProductKpiRow,
-  SignalWaveform,
   StatusBanner,
 } from "./components";
+import { FrequencyLab } from "./frequency-lab";
+import { LiveAutomationBoard } from "./live-board";
+import { Panel, PanelHeader, SectionLabel } from "./ui";
 
-const FAULT_TYPES = ["Normal", "InnerRace", "OuterRace", "Ball"] as const;
+const FAULT_TYPES = ["Normal", "Ball", "InnerRace", "OuterRace"] as const;
 
-function SignalViewer() {
-  const [faultType, setFaultType] = useState<string>("InnerRace");
+function Select({
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  label: string;
+  value: string | number;
+  onChange: (v: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      <SectionLabel>{label}</SectionLabel>
+      <select
+        className="rounded border border-hair-strong bg-panel-raised px-2 py-1 text-sm text-ink"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {children}
+      </select>
+    </label>
+  );
+}
+
+/** Picks a window, then hands it to the Frequency Lab. */
+function SignalExplorer() {
+  const [faultType, setFaultType] = useState<string>("Ball");
   const [experimentId, setExperimentId] = useState<number | null>(null);
   const [windowId, setWindowId] = useState<number | null>(null);
 
@@ -26,76 +55,70 @@ function SignalViewer() {
     queryFn: () => api.experiments({ fault_type: faultType }),
   });
   const chosenExperimentId = experimentId ?? experiments.data?.[0]?.id ?? null;
+
   const windows = useQuery({
     queryKey: ["windows", chosenExperimentId],
-    queryFn: () => api.windowsForExperiment(chosenExperimentId!, 5),
+    queryFn: () => api.windowsForExperiment(chosenExperimentId!, 8),
     enabled: chosenExperimentId !== null,
   });
   const chosenWindowId = windowId ?? windows.data?.[0]?.id ?? null;
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap gap-4">
-        <label className="text-sm">
-          <span className="mr-2 font-medium">Fault type</span>
-          <select
-            className="rounded border bg-white px-2 py-1"
-            value={faultType}
-            onChange={(e) => {
-              setFaultType(e.target.value);
-              setExperimentId(null);
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <Select
+          label="Fault class"
+          value={faultType}
+          onChange={(v) => {
+            setFaultType(v);
+            setExperimentId(null);
+            setWindowId(null);
+          }}
+        >
+          {FAULT_TYPES.map((ft) => (
+            <option key={ft}>{ft}</option>
+          ))}
+        </Select>
+
+        {experiments.data && experiments.data.length > 0 && (
+          <Select
+            label="Recording"
+            value={chosenExperimentId ?? ""}
+            onChange={(v) => {
+              setExperimentId(Number(v));
               setWindowId(null);
             }}
           >
-            {FAULT_TYPES.map((ft) => (
-              <option key={ft}>{ft}</option>
+            {experiments.data.map((exp) => (
+              <option key={exp.id} value={exp.id}>
+                #{exp.id} — {exp.source_file}
+              </option>
             ))}
-          </select>
-        </label>
-        {experiments.data && experiments.data.length > 0 && (
-          <label className="text-sm">
-            <span className="mr-2 font-medium">Experiment</span>
-            <select
-              className="rounded border bg-white px-2 py-1"
-              value={chosenExperimentId ?? ""}
-              onChange={(e) => {
-                setExperimentId(Number(e.target.value));
-                setWindowId(null);
-              }}
-            >
-              {experiments.data.map((exp) => (
-                <option key={exp.id} value={exp.id}>
-                  #{exp.id} — {exp.source_file}
-                </option>
-              ))}
-            </select>
-          </label>
+          </Select>
         )}
+
         {windows.data && windows.data.length > 0 && (
-          <label className="text-sm">
-            <span className="mr-2 font-medium">Window</span>
-            <select
-              className="rounded border bg-white px-2 py-1"
-              value={chosenWindowId ?? ""}
-              onChange={(e) => setWindowId(Number(e.target.value))}
-            >
-              {windows.data.map((w) => (
-                <option key={w.id} value={w.id}>
-                  window {w.window_index}
-                </option>
-              ))}
-            </select>
-          </label>
+          <Select
+            label="Window"
+            value={chosenWindowId ?? ""}
+            onChange={(v) => setWindowId(Number(v))}
+          >
+            {windows.data.map((w) => (
+              <option key={w.id} value={w.id}>
+                window {w.window_index}
+              </option>
+            ))}
+          </Select>
         )}
       </div>
 
       {experiments.data?.length === 0 && (
-        <p className="text-slate-500">
-          No ingested experiments with fault_type={faultType} yet.
+        <p className="text-sm text-ink-3">
+          No ingested recordings with fault class {faultType} yet.
         </p>
       )}
 
-      {chosenWindowId !== null && <SignalWaveform windowId={chosenWindowId} />}
+      {chosenWindowId !== null && <FrequencyLab windowId={chosenWindowId} />}
     </div>
   );
 }
@@ -104,53 +127,68 @@ function DashboardPageContent() {
   return (
     <>
       <Nav />
-      <main className="mx-auto max-w-6xl space-y-8 p-8">
-      <header className="space-y-1">
-        <h1 className="text-3xl font-bold">FleetMind</h1>
-        <p className="text-slate-600">
-          Federated Intelligent Predictive Maintenance for Bearing Fault
-          Diagnosis — CWRU dataset, 4 simulated manufacturing sites (motor load levels).
-        </p>
-      </header>
-
-      <StatusBanner />
-
-      <section className="rounded-xl bg-white p-6 shadow">
-        <h2 className="mb-4 text-xl font-semibold">System Overview</h2>
-        <ProductKpiRow />
-      </section>
-
-      <section className="rounded-xl bg-white p-6 shadow">
-        <div className="mb-4">
-          <h2 className="text-xl font-semibold">Model Performance: Local vs. Federated</h2>
-          <p className="text-sm text-slate-500">
-            Honest, experiment-level-split results — each site&apos;s own classifier vs. the
-            same architecture trained with FedProx across all 4 sites.
+      <main className="mx-auto max-w-6xl space-y-6 px-6 py-8">
+        <header className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight text-ink">FleetMind</h1>
+          <p className="max-w-3xl text-sm text-ink-2">
+            Federated predictive maintenance for rotating industrial machinery — CWRU
+            bearing dataset, four real motor load levels standing in for four
+            manufacturing sites.
           </p>
+        </header>
+
+        {/* The centrepiece: automation you can watch happen. */}
+        <LiveAutomationBoard />
+
+        <StatusBanner />
+
+        <Panel>
+          <PanelHeader
+            title="Frequency Lab"
+            hint="Pick any recorded window, then transform it yourself. The frequency view is the same samples re-expressed — not a second measurement."
+          />
+          <div className="px-5 py-5">
+            <SignalExplorer />
+          </div>
+        </Panel>
+
+        <Panel>
+          <PanelHeader title="System Overview" />
+          <div className="px-5 py-5">
+            <ProductKpiRow />
+          </div>
+        </Panel>
+
+        <Panel>
+          <PanelHeader
+            title="Model Performance: Local vs. Federated"
+            hint="Honest, experiment-level-split results — each site's own classifier against the same architecture trained with FedProx across all four sites."
+          />
+          <div className="px-5 py-5">
+            <ModelAccuracyChart />
+          </div>
+        </Panel>
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Panel>
+            <PanelHeader title="Simulated Sites" hint="Real CWRU motor load levels." />
+            <div className="px-5 py-5">
+              <DepotTable />
+            </div>
+          </Panel>
+
+          <Panel>
+            <PanelHeader title="Fault Class Distribution" />
+            <div className="px-5 py-5">
+              <FaultDistributionChart />
+            </div>
+          </Panel>
         </div>
-        <ModelAccuracyChart />
-      </section>
 
-      <section className="rounded-xl bg-white p-6 shadow">
-        <h2 className="mb-4 text-xl font-semibold">
-          Simulated Sites (real CWRU load levels)
-        </h2>
-        <DepotTable />
-      </section>
-
-      <section className="rounded-xl bg-white p-6 shadow">
-        <h2 className="mb-4 text-xl font-semibold">Fault Class Distribution</h2>
-        <FaultDistributionChart />
-      </section>
-
-      <section className="rounded-xl bg-white p-6 shadow">
-        <h2 className="mb-4 text-xl font-semibold">Raw Signal Viewer</h2>
-        <SignalViewer />
-      </section>
-
-      <footer className="pb-4 text-center text-xs text-slate-400">
-        FleetMind · Debotri Ghosh (25MML1008) · M.Tech Project 2
-      </footer>
+        <footer className="pb-2 text-center text-xs text-ink-3">
+          FleetMind · Debotri Ghosh (25MML1008) · M.Tech Project 2 · CWRU Bearing Data
+          Center
+        </footer>
       </main>
     </>
   );

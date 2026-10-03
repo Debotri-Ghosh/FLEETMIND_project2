@@ -100,6 +100,9 @@ export const api = {
     ),
   signalWindow: (windowId: number) =>
     getJson<import("./types").WindowDetail>(`/signal-window/${windowId}`),
+  /** Waveform + its Fourier transform for the same window, in one response. */
+  windowSpectrum: (windowId: number) =>
+    getJson<import("./types").WindowSpectrum>(`/signal-window/${windowId}/spectrum`),
   faultDistribution: () =>
     getJson<import("./types").FaultDistributionEntry[]>("/stats/fault-distribution"),
   modelPerformance: () =>

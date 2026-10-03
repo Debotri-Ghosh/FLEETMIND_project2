@@ -3,13 +3,14 @@
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
 import { api } from "@/lib/api";
+import Link from "next/link";
+
 import { RequireAuth, useAuth } from "../auth-provider";
 import {
   ErrorRetry,
   EvidencePanel,
   Nav,
   PriorityBadge,
-  ReplayControls,
   StatusBadge,
 } from "../components";
 import type { WorkOrderStatus } from "@/lib/types";
@@ -27,16 +28,16 @@ function EquipmentBoard({ depotId }: { depotId: number | null }) {
     queryFn: () => api.equipment({ depot_id: depotId ?? undefined }),
   });
 
-  if (equipment.isLoading) return <p className="text-slate-500">Loading equipment…</p>;
+  if (equipment.isLoading) return <p className="text-ink-3">Loading equipment…</p>;
   if (equipment.isError)
     return <ErrorRetry message="Failed to load equipment." onRetry={() => equipment.refetch()} />;
   if (!equipment.data?.length)
-    return <p className="text-slate-500">No equipment found.</p>;
+    return <p className="text-ink-3">No equipment found.</p>;
 
   return (
     <table className="w-full text-sm">
       <thead>
-        <tr className="border-b text-left text-slate-500">
+        <tr className="border-b text-left text-ink-3">
           <th className="py-2">Equipment</th>
           <th className="py-2">Site</th>
           <th className="py-2">Type</th>
@@ -69,7 +70,7 @@ function AiFlaggedPanel() {
   const equipment = useQuery({ queryKey: ["equipment", "all"], queryFn: () => api.equipment() });
   const [openEvidenceFor, setOpenEvidenceFor] = useState<number | null>(null);
 
-  if (requests.isLoading) return <p className="text-slate-500">Loading AI-flagged requests…</p>;
+  if (requests.isLoading) return <p className="text-ink-3">Loading AI-flagged requests…</p>;
   if (requests.isError)
     return (
       <ErrorRetry
@@ -79,7 +80,7 @@ function AiFlaggedPanel() {
     );
   if (!requests.data?.length)
     return (
-      <p className="text-slate-500">
+      <p className="text-ink-3">
         No AI-flagged requests — the agent pipeline hasn&apos;t raised any HIGH/CRITICAL risk
         decisions that don&apos;t already have an open request.
       </p>
@@ -88,7 +89,7 @@ function AiFlaggedPanel() {
   return (
     <table className="w-full text-sm">
       <thead>
-        <tr className="border-b text-left text-slate-500">
+        <tr className="border-b text-left text-ink-3">
           <th className="py-2">Equipment</th>
           <th className="py-2">Predicted Fault</th>
           <th className="py-2">Risk Score</th>
@@ -116,12 +117,12 @@ function AiFlaggedPanel() {
               <td className="py-2">
                 <StatusBadge status={r.status} />
               </td>
-              <td className="max-w-md py-2 text-slate-600">{r.agent_decision_text ?? "—"}</td>
+              <td className="max-w-md py-2 text-ink-2">{r.agent_decision_text ?? "—"}</td>
               <td className="py-2">
                 <button
                   type="button"
                   onClick={() => setOpenEvidenceFor(openEvidenceFor === r.id ? null : r.id)}
-                  className="whitespace-nowrap rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                  className="whitespace-nowrap rounded border border-hair-strong bg-panel-raised px-2 py-1 text-xs font-medium text-ink-2 hover:bg-panel-sunken"
                 >
                   {openEvidenceFor === r.id ? "Hide evidence" : "Show evidence"}
                 </button>
@@ -166,11 +167,11 @@ function DispatchQueue() {
     (r) => r.status === "reported" || r.status === "diagnosed"
   );
 
-  if (requests.isLoading) return <p className="text-slate-500">Loading requests…</p>;
+  if (requests.isLoading) return <p className="text-ink-3">Loading requests…</p>;
   if (requests.isError)
     return <ErrorRetry message="Failed to load requests." onRetry={() => requests.refetch()} />;
   if (!pending?.length)
-    return <p className="text-slate-500">Nothing awaiting dispatch.</p>;
+    return <p className="text-ink-3">Nothing awaiting dispatch.</p>;
 
   const noTechnicians = technicians.isSuccess && technicians.data.length === 0;
 
@@ -189,7 +190,7 @@ function DispatchQueue() {
       )}
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b text-left text-slate-500">
+          <tr className="border-b text-left text-ink-3">
             <th className="py-2">Request</th>
             <th className="py-2">Priority</th>
             <th className="py-2">Status</th>
@@ -209,7 +210,7 @@ function DispatchQueue() {
               </td>
               <td className="py-2">
                 <select
-                  className="rounded border bg-white px-2 py-1 disabled:opacity-50"
+                  className="rounded border border-hair bg-panel-raised px-2 py-1 disabled:opacity-50"
                   disabled={noTechnicians}
                   value={selectedTechnician[r.id] ?? ""}
                   onChange={(e) =>
@@ -248,7 +249,7 @@ function DispatchQueue() {
         </tbody>
       </table>
       {dispatch.isError && (
-        <p className="text-sm text-red-600">
+        <p className="text-sm text-crit">
           {dispatch.error instanceof Error ? dispatch.error.message : "Failed to dispatch."}
         </p>
       )}
@@ -274,18 +275,18 @@ function WorkOrderQueue() {
     },
   });
 
-  if (workOrders.isLoading) return <p className="text-slate-500">Loading work orders…</p>;
+  if (workOrders.isLoading) return <p className="text-ink-3">Loading work orders…</p>;
   if (workOrders.isError)
     return (
       <ErrorRetry message="Failed to load work orders." onRetry={() => workOrders.refetch()} />
     );
   if (!workOrders.data?.length)
-    return <p className="text-slate-500">No work orders yet.</p>;
+    return <p className="text-ink-3">No work orders yet.</p>;
 
   return (
     <table className="w-full text-sm">
       <thead>
-        <tr className="border-b text-left text-slate-500">
+        <tr className="border-b text-left text-ink-3">
           <th className="py-2">Request</th>
           <th className="py-2">Technician</th>
           <th className="py-2">Status</th>
@@ -319,7 +320,7 @@ function WorkOrderQueue() {
                   <button
                     disabled={updateStatus.isPending}
                     onClick={() => updateStatus.mutate({ id: wo.id, status: "cancelled" })}
-                    className="rounded bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700 disabled:opacity-50"
+                    className="rounded bg-hair px-3 py-1 text-xs font-medium text-ink-2 disabled:opacity-50"
                   >
                     Cancel
                   </button>
@@ -352,30 +353,34 @@ function OperatorPageContent() {
       <Nav />
       <main className="mx-auto max-w-6xl space-y-8 p-8">
         <header className="space-y-1">
-          <h1 className="text-3xl font-bold">Site Operations</h1>
-          <p className="text-slate-600">
+          <h1 className="text-2xl font-semibold tracking-tight text-ink">Site Operations</h1>
+          <p className="max-w-3xl text-sm text-ink-2">
             Equipment status is kept in sync from the agent pipeline
             (fleetmind.agents.sync_equipment_status) — it is not editable here.
           </p>
         </header>
 
-        {/* Replay rewrites predictions, decisions and equipment status across
-            every site, so the API restricts it to admins. Rendering the panel
-            for an operator would only produce a 403 on every poll. */}
+        {/* The replay controls now live on the dashboard, where they are the
+            page's centrepiece rather than a panel tucked into a console most
+            reviewers never open. Kept as a pointer so an operator who expects
+            them here knows where they went. */}
         {isAdmin && (
-          <section className="rounded-xl bg-white p-6 shadow">
-            <h2 className="mb-4 text-xl font-semibold">Simulated Sensor Feed</h2>
-            <ReplayControls />
-          </section>
+          <p className="rounded-lg border border-dashed border-hair px-4 py-3 text-xs text-ink-3">
+            The simulated sensor feed and its controls are on the{" "}
+            <Link href="/" className="text-accent hover:underline">
+              dashboard
+            </Link>
+            .
+          </p>
         )}
 
-        <section className="rounded-xl bg-white p-6 shadow">
+        <section className="rounded-panel border border-hair bg-panel p-6 shadow-panel">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-xl font-semibold">Equipment Board</h2>
+            <h2 className="text-lg font-semibold text-ink">Equipment Board</h2>
             <label className="text-sm">
               <span className="mr-2 font-medium">Site</span>
               <select
-                className="rounded border bg-white px-2 py-1"
+                className="rounded border border-hair bg-panel-raised px-2 py-1"
                 value={depotId ?? ""}
                 onChange={(e) =>
                   setDepotId(e.target.value === "" ? null : Number(e.target.value))
@@ -395,10 +400,10 @@ function OperatorPageContent() {
           <EquipmentBoard depotId={depotId} />
         </section>
 
-        <section className="rounded-xl bg-white p-6 shadow">
+        <section className="rounded-panel border border-hair bg-panel p-6 shadow-panel">
           <div className="mb-4">
-            <h2 className="text-xl font-semibold">AI-Flagged Requests</h2>
-            <p className="text-sm text-slate-500">
+            <h2 className="text-lg font-semibold text-ink">AI-Flagged Requests</h2>
+            <p className="text-sm text-ink-3">
               Auto-filed by the agent pipeline (fleetmind.agents.sync_equipment_status) when a
               HIGH or CRITICAL risk decision has no open request yet — shows the fault type, risk
               score, and decision text behind the flag, not just a status badge.
@@ -407,13 +412,13 @@ function OperatorPageContent() {
           <AiFlaggedPanel />
         </section>
 
-        <section className="rounded-xl bg-white p-6 shadow">
-          <h2 className="mb-4 text-xl font-semibold">Awaiting Dispatch</h2>
+        <section className="rounded-panel border border-hair bg-panel p-6 shadow-panel">
+          <h2 className="mb-4 text-lg font-semibold text-ink">Awaiting Dispatch</h2>
           <DispatchQueue />
         </section>
 
-        <section className="rounded-xl bg-white p-6 shadow">
-          <h2 className="mb-4 text-xl font-semibold">Work Order Queue</h2>
+        <section className="rounded-panel border border-hair bg-panel p-6 shadow-panel">
+          <h2 className="mb-4 text-lg font-semibold text-ink">Work Order Queue</h2>
           <WorkOrderQueue />
         </section>
       </main>
