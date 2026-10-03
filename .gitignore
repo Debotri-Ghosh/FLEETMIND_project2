@@ -38,3 +38,6 @@ mlruns/
 # ── IDE ──────────────────────────────────────────────────
 .vscode/
 .idea/
+
+# Startup-script logs (scripts/start-demo.ps1)
+.demo-logs/
