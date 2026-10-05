@@ -115,9 +115,23 @@ def list_service_requests(
 
 
 @router.get("/{request_id}", response_model=ServiceRequestSchema)
-def get_service_request(request_id: int, db: Session = Depends(db_session.get_session)):
+def get_service_request(
+    request_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(db_session.get_session),
+):
+    """One service request, if the caller is entitled to it.
+
+    This handler was the single endpoint in the file that took neither a user
+    dependency nor a router-level guard, so it served the full record --
+    customer, site, equipment and the agent-decision ids -- to anyone with no
+    token at all, and a 200-vs-404 difference let an anonymous caller
+    enumerate which request ids exist. Scoped like every sibling now: outside
+    the caller's scope reads as 404, never 403, so ids stay unguessable.
+    """
+    request = _assert_may_read_request(db, user, request_id)
     row = db.execute(
-        _select_with_agent_context().where(ServiceRequestModel.id == request_id)
+        _select_with_agent_context().where(ServiceRequestModel.id == request.id)
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail="service request not found")

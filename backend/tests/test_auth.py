@@ -54,6 +54,38 @@ def _concrete(path: str) -> str:
     return "/".join(parts)
 
 
+def _all_routes(app) -> list[tuple[str, str]]:
+    """Every (method, path) the application actually serves.
+
+    `app.routes` is NOT a flat list of APIRoute. This FastAPI version wraps
+    each `include_router()` call in an internal `_IncludedRouter` object that
+    exposes its children only via `.original_router.routes` -- so naively
+    filtering `app.routes` for APIRoute finds just the handlers declared
+    directly on the app. In this project that was 2 of 34 routes, and after
+    subtracting the public ones the route-walking auth test below was probing
+    exactly ONE endpoint while appearing to cover everything.
+
+    Both shapes are handled so this keeps working whichever way a future
+    FastAPI version organises the table.
+    """
+    found: list[tuple[str, str]] = []
+
+    def walk(routes) -> None:
+        for route in routes:
+            if isinstance(route, APIRoute):
+                for method in sorted(route.methods - {"HEAD", "OPTIONS"}):
+                    found.append((method, route.path))
+            else:
+                nested = getattr(getattr(route, "original_router", None), "routes", None)
+                if nested is None:
+                    nested = getattr(route, "routes", None)
+                if nested:
+                    walk(nested)
+
+    walk(app.routes)
+    return found
+
+
 def test_every_route_refuses_an_anonymous_caller(anon_client):
     """Enumerated from the app's own route table, not a hand-written list.
 
@@ -64,18 +96,42 @@ def test_every_route_refuses_an_anonymous_caller(anon_client):
     app = create_app()
     unprotected: list[str] = []
 
-    for route in app.routes:
-        if not isinstance(route, APIRoute) or route.path in PUBLIC_PATHS:
+    for method, path in _all_routes(app):
+        if path in PUBLIC_PATHS:
             continue
-        for method in sorted(route.methods - {"HEAD", "OPTIONS"}):
-            response = anon_client.request(method, _concrete(route.path), json={})
-            # 401 is the correct answer. A 422 would mean the body was
-            # validated before auth ran, which leaks the schema; anything 2xx
-            # means the route is open.
-            if response.status_code != 401:
-                unprotected.append(f"{method} {route.path} -> {response.status_code}")
+        response = anon_client.request(method, _concrete(path), json={})
+        # 401 is the correct answer. A 422 would mean the body was validated
+        # before auth ran, which leaks the schema; anything 2xx means the
+        # route is open.
+        if response.status_code != 401:
+            unprotected.append(f"{method} {path} -> {response.status_code}")
 
     assert not unprotected, "routes reachable without a token: " + "; ".join(unprotected)
+
+
+def test_the_route_walk_actually_finds_the_whole_api():
+    """Guards the guard: a reachability test that reaches nothing passes.
+
+    The test above spent this project's whole history probing a single
+    endpoint because `app.routes` is not flat. Pinning a realistic floor means
+    that if a future FastAPI release changes the table's shape again, this
+    fails loudly instead of quietly going vacuous.
+    """
+    routes = _all_routes(create_app())
+    paths = {p for _, p in routes}
+
+    assert len(routes) >= 30, f"route walk found only {len(routes)} routes -- it has broken"
+    # A spread across routers, so finding one router's routes is not enough.
+    for expected in (
+        "/auth/login",
+        "/equipment",
+        "/service-requests",
+        "/work-orders",
+        "/replay/status",
+        "/stats/product-summary",
+        "/signal-window/{window_id}/spectrum",
+    ):
+        assert expected in paths, f"route walk missed {expected}"
 
 
 def test_livez_is_open_but_health_is_not(anon_client):
