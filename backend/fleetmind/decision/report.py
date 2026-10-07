@@ -65,7 +65,7 @@ def quality_score(decisions: list):
 
 def _print_depot(r: dict) -> None:
     s, c, q = r["split"], r["calibration"], r["decision_quality"]
-    print(f"\n=== site {r['depot_id']} — {r['site_name']} ({r['load_hp']} HP) ===")
+    print(f"\n=== site {r['depot_id']} -- {r['site_name']} ({r['load_hp']} HP) ===")
     print(
         f"  held-out: {s['n_holdout_recordings']} recordings / "
         f"{s['n_holdout_windows']} windows   (train {s['n_train_recordings']}/"
@@ -99,7 +99,7 @@ def _print_depot(r: dict) -> None:
     print(f"  miss rate        : {'NOT MEASURABLE' if mr is None else f'{mr:.4f}'}")
     print(f"  detection delay  : {'n/a' if dd is None else f'{dd:.2f} windows'}")
     for metric, reason in q["not_measurable"].items():
-        print(f"  ! {metric} unmeasurable — {reason}")
+        print(f"  ! {metric} unmeasurable -- {reason}")
 
 
 def main() -> None:

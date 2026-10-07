@@ -627,3 +627,43 @@ Verified two independent ways: by the new `decision/probs.py` path, and by repli
 **Phase 0 is read-only, proven rather than asserted:** `(predictions, decisions, requests, equipment-in-maintenance, released windows, max(agent_decisions.id))` were `(4367, 4367, 10, 6, 4367, 48346)` both before and after a full report run — identical, including the decision-id high-water mark.
 
 **Housekeeping note, not caused by this work:** the live DB is **no longer at replay-zero**, contrary to the state the Slice O entry says it was left in — all 4,367 windows are released, with 4,367 predictions, 4,367 decisions, 10 service requests and 6 equipment in maintenance. Something ran the replay to completion between then and now. `scripts/start-demo.ps1` rewinds it when the demo is next brought up.
+
+2026-10-07 — Decision Intelligence **Phase 1** — a properly split retrain with real best-epoch selection, and **a result that cuts both ways: v2 loses 5.0 accuracy points but is near-perfectly calibrated** — verified via: `pytest` (298 passing, 17 new in `tests/test_decision_phase1.py`), `ruff check .` / `ruff format --check .` / `mypy fleetmind` (clean, 74 source files), four real 20-epoch training runs against the live archive, a real `python -m fleetmind.decision.compare` run, and SHA-256 fingerprints proving the deployed v1 checkpoints were never written to — result: pass, and the outcome is **not** the one the Phase 0 finding implied.
+
+**The owner's decision, recorded:** keep the deployed checkpoints untouched and quote the honest 60.38% everywhere; do not retrain over them. Every per-site accuracy in `README.md`, `FleetMind_Implementation_Report.md`, `PROJECT_WALKTHROUGH.md` and `DEMO_SCRIPT.md` now reads 53.81 / 69.49 / 61.02 / 57.20%, mean 60.38%, with the three-class and 50.0%-floor caveats attached as part of the claim (commit `682c3d8a`, docs only).
+
+**The split design is the part worth defending.** A fresh three-way partition over all 16 recordings per site would have put recordings v1 *trained on* into the new test set, scoring v1 on its own training data and rigging the comparison in its favour. So the test set is pinned to **v1's original 4 held-out recordings, unchanged**, and train/selection are carved out of **v1's own 12 training recordings** (8/4 at `frac=0.75`). Both models are then scored on data neither has ever trained on — the only arrangement in which the comparison means anything.
+
+That choice has a cost, and it is stated rather than hidden: **v2 trains on ~30% less data than v1** (531–650 windows vs 766–887). So one training run produces **two** v2 arms, which makes the result attributable:
+
+| comparison | isolates | mean effect | per site |
+|---|---|---|---|
+| v2-last − v1 | the smaller training set | **−0.0593** | +0.030 / −0.089 / −0.186 / +0.009 |
+| v2-best − v2-last | best-epoch selection | **+0.0095** | −0.013 / 0.000 / +0.051 / 0.000 |
+| v2-best − v1 | the net practical question | **−0.0498** | +0.017 / −0.089 / −0.136 / +0.009 |
+
+**On accuracy, v2 loses, and the decomposition says why:** the data reduction costs 5.9 points while best-epoch selection recovers only 1.0. Selection was a literal no-op at sites 2 and 4 because the best epoch *was* epoch 20 — selection accuracy was still climbing at the end of training, so 20 epochs never reached the overfitting regime where selection pays.
+
+**But accuracy is the wrong headline here, and the other three columns say so.**
+
+| arm | mean acc | mean ECE | over-confidence | OuterRace predicted share | InnerRace recall |
+|---|---|---|---|---|---|
+| v1 (deployed) | **0.6038** | 0.2146 | **+0.2101** | **0.692** | 0.042 |
+| v2-last | 0.5445 | 0.1082 | +0.0352 | 0.499 | 0.140 |
+| v2-best | 0.5540 | **0.0966** | **+0.0065** | **0.499** | **0.153** |
+
+- **v1's accuracy edge is bought by leaning on the majority class.** It gives **69.2%** of its test predictions to OuterRace, which is **50.0%** of the test set. v2-best gives **49.9%** — matching the true share almost exactly. At site 1, v1's OuterRace share is **0.915**.
+- **v2-best is essentially perfectly calibrated**: it claims 56.1% and delivers 55.4%, an over-confidence of **+0.0065** against v1's **+0.2101** — a 32-fold reduction, with ECE less than half.
+- **InnerRace recall rises 0.042 → 0.153**, a 3.6x improvement on the class the FFT fix was specifically meant to make learnable. v1 at site 1 never gets a single InnerRace window right (recall **0.000**).
+
+**So the honest reading: the owner's decision holds on accuracy, and now has a measured reason rather than an inertia argument — but v2 is the better-behaved model on every axis except the one the project has been quoting.** Phase 2 (conformal prediction) and Phase 3 (expected-cost policy) both consume a *posterior*, not a label, and they are only sound on a calibrated one. A model that is 5 points less accurate and 32 times less over-confident is the better foundation for them. That trade should be made deliberately when those phases land, not now.
+
+**Honest caveat on the noise floor:** one seed, four sites, 236 test windows each, 8 training recordings. Site 3 swings −0.186 on the data reduction alone, so differences of a few points are not separable from seed variance. The calibration gap (+0.2101 vs +0.0065) and the degeneracy gap (0.692 vs 0.499) are large enough to be believable; the 5-point accuracy gap is not, on its own. A grouped k-fold over several seeds is what would settle it.
+
+**v1 was provably never written to.** SHA-256 prefixes of `mlruns/depot_{1-4}/cnn_state_dict.pt` were `c7f7791d9c211887 / 91ec17ef1f6e385f / 38b2cbe5ed664e16 / 7484c0148d3df3e6` before the retrain and identical after. `retrain.out_dir_for()` returns `mlruns/depot_N_v2` and a test asserts it never equals `mlruns/depot_N`.
+
+**New modules:** `decision/split3.py` (three-way split; `Split3Description.__post_init__` *raises* on any overlap or empty set rather than trusting the caller), `decision/retrain.py` (keeps a real `deepcopy` snapshot of the best-on-selection epoch; strict `>` so the *earliest* best epoch wins a tie, i.e. the less-overfit one; an in-function assertion refuses to train if test recordings ever appear in train or selection), `decision/compare.py` (the only module that opens the test set, read-only; raises `FileNotFoundError` naming the retrain command rather than silently dropping an arm). Outputs in `mlruns/depot_N_v2/` and `mlruns/decision/phase1/` (gitignored, like all of `mlruns/`).
+
+**The tests do not depend on the live database.** A synthetic sqlite archive reproduces CWRU's exact per-site structure — 4 Ball, 4 InnerRace, **1 Normal**, 7 OuterRace — because a test that skips when a server is unreachable is a test that can quietly stop examining anything, which is the failure mode this project keeps finding in itself. Covered: all three overlap shapes rejected by name, empty sets rejected, window-level (not just recording-level) disjointness, the test set matching v1's holdout exactly, train+selection exactly partitioning v1's training recordings with nothing invented or dropped, best-epoch selection agreeing with the argmax of its own recorded history, and the leak guard **confirmed to fire** when a split is forced to overlap.
+
+**The Normal limitation propagates and is now pinned by a test.** Applying the stratified splitter twice keeps the single Normal recording in the innermost training set, so **neither the selection set nor the test set contains a healthy machine** at any site. Best-epoch selection is therefore a three-class criterion, and a temperature fitted on this selection set would never see a healthy example. The false-alarm rate remains unmeasurable.
