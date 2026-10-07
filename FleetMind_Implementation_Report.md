@@ -663,10 +663,11 @@ Stated as plainly here as the project states it internally.
    need `SameSite=None; Secure`, credentialed CORS and TLS. Every restriction
    is still server-side, so a stolen token cannot read another tenant's rows —
    but there is no refresh rotation, rate limiting or password reset.
-5. **Docker is unverified end to end.** `docker compose config` resolves
-   cleanly, but the Docker daemon is unreachable on the development laptop
-   (WSL2/Hyper-V are blocked by policy), so `docker compose up` has never been
-   run. Stated rather than implied.
+5. **Docker is unverified against the current code.** `docker compose up` has
+   been run on the development laptop -- the stack in `docker ps` was started from this repository's compose file on 2026-10-07, but from images **built on 2026-09-10** -- before the product, auth, replay and LLM layers existed. The running API serves **7 routes** against the current code's **31**. So the Compose
+   path has never been exercised with the code this report describes. An
+   earlier version of this report said the daemon was unreachable; that held
+   only while Docker Desktop was not running.
 6. **No `FleetMind_Literature_Review.md` exists.** `CLAUDE.md` referred to a
    six-paper literature review at this path; no such file is present in the
    repository or anywhere in its 44-commit history. The reference was stale and

@@ -106,9 +106,12 @@ Plain FedAvg oscillated round to round and is not the headline result; FedProx
 
 ## (c) Do NOT claim these things
 
-- **Cloud deployment.** The system has never been deployed. `docker compose config`
-  resolves; `docker compose up` has **never run** — the Docker daemon is unreachable
-  on this laptop (WSL2/Hyper-V blocked by policy). It runs locally only.
+- **Cloud deployment.** The system has never been deployed anywhere. It runs locally.
+- **That it runs under Docker.** Do not claim this either. `docker compose up` *has*
+  been run on this laptop, but on images **built 2026-09-10** -- before the product,
+  auth, replay and LLM layers. That container serves **7 API routes; the current code
+  has 31**. The code you are presenting has never been built into an image and run.
+  (Corrected 2026-10-08: an earlier version of this sheet said Compose had never run.)
 - **Live sensors.** There are none. CWRU is a static archive; the replay engine
   progressively releases recorded windows and the UI says so. GPS and site locations
   on `Equipment`/`WorkOrder` are **simulated** — CWRU has no location data.

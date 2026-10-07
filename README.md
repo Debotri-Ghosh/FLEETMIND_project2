@@ -407,11 +407,12 @@ npm run build
 
 ## Known honest limitations
 
-1. **Docker is unverified end to end.** `docker compose config` resolves
-   cleanly and the images are defined, but the Docker daemon is unreachable on
-   the development laptop (WSL2/Hyper-V blocked by policy), so
-   `docker compose up` has **never actually been run**. Treat the Compose path
-   as untested.
+1. **Docker is unverified against the current code.** `docker compose up`
+   *has* been run on the development laptop -- the stack in `docker ps` was started from this repository's compose file on 2026-10-07, but from images **built on 2026-09-10** -- before the product, auth, replay and LLM layers existed. The running API serves **7 routes** against the current code's **31**. The current
+   code has never been built into an image (`docker compose up --build`) and
+   run, so treat the Compose path as untested. Earlier versions of this README
+   said the daemon was unreachable; that was true only while Docker Desktop was
+   not running.
 2. **The GAN augmentation has an unresolved domain mismatch.** TimeGAN
    generates *time-domain* synthetic windows, but the classifier now trains on
    their *FFT magnitude*. A window can be plausible in time and unrealistic in

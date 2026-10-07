@@ -497,7 +497,8 @@ control.
 
 **Limitations:** GAN augmentation generates time-domain windows while the
 classifier trains on spectra; defect-band corroboration is often weak and the UI
-shows it; `docker compose up` has never been run (daemon blocked by policy);
+shows it; Compose has only ever run images built on 2026-09-10, before most of
+this system existed (7 routes vs 31), so the current code is unverified under Docker;
 auth is demo-grade (`localStorage`, no refresh rotation).
 
 ---

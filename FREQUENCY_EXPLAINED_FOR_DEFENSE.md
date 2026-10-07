@@ -425,8 +425,12 @@ essentially absent.
 
 If they ask *"so is your model wrong?"* — the honest answer has three parts:
 
-1. **This is one window, not the model's overall performance.** Validated
-   accuracy is 62–72%, measured separately.
+1. **This is one window, not the model's overall performance.** The deployed
+   model's accuracy is **60.38%** (570 of 944 held-out windows), measured
+   separately -- over three fault classes, against a 50.0% floor, since no
+   healthy machine is held out. *(Corrected 2026-10-08: this line previously
+   said 62–72%, a figure that described checkpoints never saved to disk -- see
+   `PRESENTATION_NUMBERS.md`.)*
 2. **The classifier is not required to use the defect frequency.** It learns
    whatever separates the classes in the normalised spectrum — which may be
    broadband resonance, like the energy at 1,382 Hz. That can be a perfectly
