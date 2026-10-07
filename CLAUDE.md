@@ -767,3 +767,20 @@ Outputs: `mlruns/decision/phase2/{depot_1..4,summary}.json` (gitignored, like al
 **A test caught an error in my own stated reasoning.** `recording.py`'s docstring originally claimed that averaging *probabilities* lets one saturated window dominate and that logit averaging avoids it. The opposite is true, and `test_one_extreme_logit_hijacks_logit_averaging_but_not_the_other_rules` proves it: with one window at logit 40 and nine at logit 1.0 for another class, logit averaging picks the outlier's class while probability averaging cannot, because a bounded probability contributes at most 1/n. Logit averaging is the *fragile* rule. The docstring is corrected and the test pins the real behaviour; logit averaging is still reported first because this task specified it.
 
 Read-only: no database writes, no API, pipeline or UI wiring. Outputs in `mlruns/decision/recording_level/` (gitignored). Guards: `aggregate([])` and `RecordingScore.accuracy` on an empty score both raise rather than computing 0/0, pinned by `test_scoring_zero_recordings_raises_rather_than_reporting_an_accuracy`; logit averaging refuses posteriors carrying no logits rather than scoring them as zeros.
+
+2026-10-07 — **Merged to `main` by fast-forward, and `PRESENTATION_NUMBERS.md` added** — verified via the full gate run twice, once on the branch and once on `main` after the merge, plus a SHA-256 re-check of the deployed checkpoints.
+
+**Merge.** `main` was tagged **`pre-decision-merge` at `c7167e13`** before anything moved, so the pre-decision state is recoverable by name. `git merge-base --is-ancestor main improve/decision-intelligence` confirmed a true fast-forward was available *before* attempting it, and `git merge --ff-only` then took `main` from `c7167e13` to **`ce9a5239`**, gaining 8 commits: the BatchNorm study, the decision-intelligence plan, Phases 0–2, the two docs corrections, and the recording-level work. No merge commit, no rebase, no force.
+
+| Gate | On the branch | On `main` after the merge |
+|---|---|---|
+| `pytest` | **329 passed** | **329 passed** |
+| `ruff check .` | All checks passed | All checks passed |
+| `ruff format --check .` | 111 files already formatted | 111 files already formatted |
+| `mypy fleetmind` | no issues, 78 source files | no issues, 78 source files |
+
+All four deployed checkpoints' SHA-256 were confirmed unchanged by the merge.
+
+**`PRESENTATION_NUMBERS.md`** — a one-page defence sheet at the repo root, with **every figure re-verified against the repository rather than copied from any earlier document**. Four sections: numbers safe to quote, each with the command or file that produces it (deployed per-site accuracy 53.81/69.49/61.02/57.20, overall 60.38% = 570/944, three-class against a 50.0% floor; recording-level 10/16 with the InnerRace 0/4 breakdown; federated 42.86% as run and 52.60% with BatchNorm buffers aggregated, both below the 60.05% local baseline); numbers not to quote (91.44% as accuracy — re-verified live as 3,993/4,367 = 91.4358%; 62.7–72.5%; any 32-fold calibration claim); things not to claim at all (cloud deployment, live sensors, learned agents, federated beating local, any ROI figure, and the defect frequencies explaining the model); and one honest paragraph on Phase 2.
+
+Confirmed by grep that the three forbidden figures appear in that file **only** inside the "do not quote" table, never as a claim.
