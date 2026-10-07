@@ -13,7 +13,7 @@ calibration number measured downstream.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
@@ -33,6 +33,10 @@ class WindowPosterior:
     window_index: int
     true_label: str
     probabilities: list[float]  # ordered as LABEL_MAP
+    #: Pre-softmax outputs, ordered as LABEL_MAP. Temperature scaling divides
+    #: these by T and re-softmaxes, so it cannot work from probabilities alone:
+    #: the softmax has already discarded the scale that T is meant to adjust.
+    logits: list[float] = field(default_factory=list)
 
     @property
     def predicted_label(self) -> str:
@@ -87,9 +91,10 @@ def posteriors(
         x = torch.tensor([_prepare(vals) for _, _, _, vals, _ in chunk], dtype=torch.float32)
         x = x.unsqueeze(1)  # (batch, 1, bins)
         with torch.no_grad():
-            probs = torch.softmax(model(x), dim=1)
-        for (window_id, experiment_id, window_index, _vals, true_label), row in zip(
-            chunk, probs, strict=True
+            logits = model(x)
+            probs = torch.softmax(logits, dim=1)
+        for (window_id, experiment_id, window_index, _vals, true_label), row, raw in zip(
+            chunk, probs, logits, strict=True
         ):
             out.append(
                 WindowPosterior(
@@ -98,6 +103,7 @@ def posteriors(
                     window_index=window_index,
                     true_label=true_label,
                     probabilities=[float(v) for v in row],
+                    logits=[float(v) for v in raw],
                 )
             )
     return out

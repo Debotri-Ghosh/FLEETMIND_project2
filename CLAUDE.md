@@ -680,3 +680,60 @@ That choice has a cost, and it is stated rather than hidden: **v2 trains on ~30%
 **The tests do not depend on the live database.** A synthetic sqlite archive reproduces CWRU's exact per-site structure — 4 Ball, 4 InnerRace, **1 Normal**, 7 OuterRace — because a test that skips when a server is unreachable is a test that can quietly stop examining anything, which is the failure mode this project keeps finding in itself. Covered: all three overlap shapes rejected by name, empty sets rejected, window-level (not just recording-level) disjointness, the test set matching v1's holdout exactly, train+selection exactly partitioning v1's training recordings with nothing invented or dropped, best-epoch selection agreeing with the argmax of its own recorded history, and the leak guard **confirmed to fire** when a split is forced to overlap.
 
 **The Normal limitation propagates and is now pinned by a test.** Applying the stratified splitter twice keeps the single Normal recording in the innermost training set, so **neither the selection set nor the test set contains a healthy machine** at any site. Best-epoch selection is therefore a three-class criterion, and a temperature fitted on this selection set would never see a healthy example. The false-alarm rate remains unmeasurable.
+
+2026-10-07 — Decision Intelligence **Phase 2** — temperature scaling and split-conformal prediction sets, **and both come back negative on this dataset** — verified via: `pytest` (317 passing, 19 new in `tests/test_decision_phase2.py`), `ruff check .` / `ruff format --check .` / `mypy fleetmind` (clean, 77 source files), a real `python -m fleetmind.decision.phase2` run against the live archive, and SHA-256 fingerprints proving the deployed v1 checkpoints were untouched — result: pass, and **neither technique should be shipped.** PLAN.md said "ship only if ECE improves; report honestly if it does not." It does not.
+
+**Protocol.** Base arm **v2-last**, because its selection set never chose its weights, so that set is genuinely free for calibration; v2-best run beside it as a sensitivity check, since fitting on data that already picked the checkpoint is a mild reuse of the same sample. Temperature **and** the conformal quantile fitted on the **selection set only** (4 recordings per site); the test set opened once, read-only. Nothing wired into the API, pipeline or UI — `grep` confirms no production module imports `fleetmind.decision` at all.
+
+### Temperature scaling makes calibration *worse* on the test set
+
+| arm | mean ECE before -> after | mean Brier before -> after | mean accuracy |
+|---|---|---|---|
+| v2-last (base) | 0.1082 -> **0.1172** (worse) | 0.5812 -> **0.5876** (worse) | 0.5445, unchanged |
+| v2-best (sensitivity) | 0.0966 -> **0.1216** (worse) | 0.5726 -> **0.5820** (worse) | 0.5540, unchanged |
+
+**The fitted temperatures disagree about the direction of the miscalibration.** Per site, v2-last fits **T = 0.724 / 0.646 / 1.351 / 2.379** — sites 1 and 2 are *under*-confident (T < 1 sharpens them), sites 3 and 4 over-confident. Per-site test ECE, v2-last: site 1 **0.0572 -> 0.0787** (worse), site 2 0.0817 -> 0.0768 (slightly better), site 3 **0.2150 -> 0.1378** (much better), site 4 **0.0787 -> 0.1755** (much worse). Site 4's T = 2.379 is a large correction learned from four recordings, and it overshoots badly on four different ones: Brier +0.0598.
+
+**Attributable to the calibration sample, not to the method.** One fitted scalar is the least overfittable calibration there is, and it still does not transfer across four autocorrelated recordings. `tests/test_decision_phase2.py` confirms the implementation is right — fitting an artificially over-confident model drives T above 1.5, an under-confident one below 0.9, and NLL never increases. So the honest conclusion is that **the dataset cannot support even a one-parameter recalibration at this granularity**, which is a more useful finding than a cosmetic ECE win would have been.
+
+**Accuracy was bit-identical before and after at every site (+0.0000)**, as it must be: dividing all logits by one positive scalar preserves their order. `test_temperature_never_changes_a_prediction` checks that over 420 logit/temperature combinations.
+
+### Conformal sets are honest but close to useless here
+
+v2-last, raw probabilities, 90% target:
+
+| site | empirical coverage | mean set size (of 4) | coverage by true class |
+|---|---|---|---|
+| 1 | 0.9576 | 2.38 | Inner **0.847**, Outer 1.000, Ball 0.983 |
+| 2 | **0.8686** | 1.92 | Inner **0.508**, Outer 0.983, Ball 1.000 |
+| 3 | **0.8644** | 2.67 | Inner 1.000, Outer **0.729**, Ball 1.000 |
+| 4 | 1.0000 | **3.58** | all 1.000 |
+| mean | 0.9227 | 2.64 | — |
+
+Three things, all of which matter more than the mean:
+
+1. **Coverage misses the 90% target at 2 of 4 sites** (0.8686 and 0.8644). That is the exchangeability violation showing up exactly where the caveat predicted it: the guarantee assumes exchangeable calibration and test points, and windows drawn from four continuous recordings are not.
+2. **Where coverage succeeds it is often vacuous.** Site 4 achieves 1.0000 with a mean set size of **3.58 out of 4 classes** — "the fault is one of these four" is a guarantee with no content. Across sites the mean set is 2.64 of 4.
+3. **Marginal coverage hides catastrophic per-class failure.** InnerRace coverage runs from **0.508** (site 2) to 1.000; OuterRace from **0.729** (site 3) to 1.000. A maintenance decision needs per-fault reliability, and split conformal guarantees only the marginal rate — it buys the average by over-covering easy classes and under-covering hard ones.
+
+Temperature scaling before conformal changed little: mean coverage 0.9227 -> 0.9290, mean set size 2.64 -> 2.65, still 2/4 sites on target.
+
+### What is genuinely established, and what is not
+
+**The implementations are correct**, and that is demonstrated where it can be: `test_coverage_guarantee_holds_on_exchangeable_synthetic_data` draws calibration and test i.i.d. from one process over 40 repetitions and confirms mean coverage >= 0.90 while staying below 0.99, so it is not passing by emitting every label. `test_quantile_index_matches_values_worked_out_by_hand` pins `ceil((n+1)(1-alpha))` against eight hand-computed cases, because dropping the `+1` or the ceiling undercovers while still producing plausible numbers. A calibration set too small to certify the level returns `q_hat = inf` and serialises as `null`, never as a number; an empty prediction set is reported as empty and **never silently widened to the argmax**, which would break the guarantee to make the output tidier.
+
+**What is not established is any claim about this data.** Say at a defence: the coverage figures are *consistent with* the 90% target at two sites and below it at two others, and nothing here verifies the guarantee, because the assumption it rests on is violated by construction.
+
+**Two limitations are printed in the command's own output** rather than left to a reader: the effective calibration sample is **4 recordings per site, not ~236 windows**; and **Normal is absent from both the calibration and test sets**, so healthy-class coverage is `UNMEASURABLE` and reported as `None`. `test_coverage_for_an_absent_class_is_none_not_a_number` pins that.
+
+### Sanity checks worth recording
+
+v2-best and v2-last give **identical numbers at sites 2 and 4** — correct, not a bug: `best_epoch` is 20 at both, so the two snapshots are the same weights (`torch.equal` on every tensor, max |diff| 0.0). The saved *files* differ in bytes only because two separate `deepcopy`s pickle differently. At sites 1 and 3 the largest best-vs-last difference sits in `features.1.num_batches_tracked` and equals batches-per-epoch x epochs-elapsed exactly (9 x 2 = 18 at site 1, 11 x 3 = 33 at site 3) — an independent confirmation that the best-epoch snapshot is taken at the epoch it claims.
+
+**v1 untouched, full SHA-256 checked before and after Step 2:** `c7f7791d…`, `91ec17ef…`, `38b2cbe5…`, `7484c014…` — all four unchanged. `test_every_checkpoint_phase2_can_load_lives_under_a_v2_directory` resolves all 8 arm paths and asserts each sits under `depot_N_v2`, so the deployed files are unreachable from this module.
+
+### Consequence for Phase 3
+
+An expected-cost policy consumes a posterior and would inherit this miscalibration directly. Phase 3 should not assume calibrated probabilities are available; the realistic options are to work from the uncalibrated posterior and state that, or to pool calibration data across sites and lose the per-site specificity. That is a decision to take with the evidence above, not an implementation detail.
+
+Outputs: `mlruns/decision/phase2/{depot_1..4,summary}.json` (gitignored, like all of `mlruns/`).
