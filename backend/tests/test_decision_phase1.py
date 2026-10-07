@@ -15,70 +15,13 @@ Every test asserts a positive count of what it examined.
 
 from __future__ import annotations
 
-import random
-
 import pytest
-from sqlalchemy.orm import sessionmaker
 
-from fleetmind.db.models import Depot, Experiment, SignalWindow
+# The synthetic-archive fixture and its constants now live in conftest.py, so the
+# Phase 1 and Phase 3 tests share one definition of CWRU's recording structure.
+from conftest import WINDOWS_PER_RECORDING  # noqa: E402
+
 from fleetmind.decision import compare, retrain, split3
-
-#: CWRU's real per-site recording structure, which is what makes the
-#: single-Normal-recording limitation structural rather than incidental.
-RECORDINGS_PER_SITE = {"Ball": 4, "InnerRace": 4, "Normal": 1, "OuterRace": 7}
-WINDOWS_PER_RECORDING = 6
-SAMPLES = 2048
-
-
-@pytest.fixture()
-def archive_session(db_engine):
-    """A synthetic archive with CWRU's exact recording structure, in sqlite.
-
-    Deliberately not the live PostgreSQL database: a test that silently skips
-    when a server is unreachable is a test that can stop examining anything, and
-    this suite exists to catch exactly that. The real split is verified by
-    running `python -m fleetmind.decision.{retrain,compare}` against the live
-    archive; these tests pin the structure and the guards.
-
-    Four sites, 16 recordings each, laid out as CWRU is -- including exactly one
-    Normal recording per site.
-    """
-    factory = sessionmaker(bind=db_engine, expire_on_commit=False)
-    session = factory()
-    rng = random.Random(0)
-    for depot_id, load_hp in enumerate([0, 1, 2, 3], start=1):
-        session.add(Depot(id=depot_id, name=f"Plant {chr(64 + depot_id)}", load_hp=load_hp))
-        session.flush()
-        for fault, n_recordings in RECORDINGS_PER_SITE.items():
-            for _ in range(n_recordings):
-                exp = Experiment(
-                    depot_id=depot_id,
-                    fault_type=fault,
-                    sampling_rate_hz=12000,
-                    source_file=f"{fault}.mat",
-                    source_variable="DE",
-                    sensor_position="DE",
-                    n_samples=SAMPLES * WINDOWS_PER_RECORDING,
-                )
-                session.add(exp)
-                session.flush()
-                # A per-class amplitude offset so the classes are not identical
-                # noise -- the selection accuracy must be able to vary at all.
-                scale = 0.05 * (1 + list(RECORDINGS_PER_SITE).index(fault))
-                for index in range(WINDOWS_PER_RECORDING):
-                    session.add(
-                        SignalWindow(
-                            experiment_id=exp.id,
-                            window_index=index,
-                            start_sample=index * SAMPLES,
-                            end_sample=(index + 1) * SAMPLES,
-                            raw_values=[rng.gauss(0, scale) for _ in range(SAMPLES)],
-                            label=fault,
-                        )
-                    )
-    session.commit()
-    yield session
-    session.close()
 
 
 # ── the split's structure ──────────────────────────────────────────────
