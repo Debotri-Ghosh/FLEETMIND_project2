@@ -855,3 +855,28 @@ Verified independently of the script: `/livez` 200 without a token; `/health` 40
 **Caveats printed by the command itself:** cross-site evaluation is a domain shift (different motor load) — here it did not hurt; the decision unit is still "any window", as in Phase 0 (Phase 4 replaces it); the policy consumes v1's *uncalibrated* posterior; n is 16 faulted recordings and 12 healthy pairs, the latter coming from only **4 distinct Normal recordings**.
 
 Also: the synthetic CWRU-shaped `archive_session` fixture moved from `test_decision_phase1.py` into `conftest.py`, so Phase 1 and Phase 3 share one definition; all 17 Phase 1 tests still pass.
+
+2026-10-08 — Decision Intelligence **Phase 4** — repeated sequential probability ratio test, and **a modest robustness gain capped by the model's over-confidence** — verified via: a real `python -m fleetmind.decision.phase4` run on the deployed v1 checkpoints, `pytest` (11 new in `tests/test_decision_phase4.py`), `ruff` / `format` / `mypy fleetmind` clean (84 source files) — result: pass.
+
+**The test.** `decision/sequential.py` accumulates each window's log-likelihood ratio and flags at Wald's upper boundary `A = log((1-β)/α) = 4.5539`, accepting "healthy" and resetting at `B = log(β/(1-α)) = -2.9857`, with α = 0.01, β = 0.05 (`OPEN_QUESTIONS.md` Q5). Resetting makes it a *repeated* SPRT, so a machine cleared once is still watched. The posterior is turned into a likelihood ratio by dividing out the training prior, which is **derived, not chosen**: inverse-frequency class weighting makes the effective prior uniform over 4 classes, so P(faulted) = 3/4. A consequence worth knowing — and pinned by a test — is that `P(faulted) = 0.6` is evidence of *health*, because it is below the prior.
+
+| rule (deployed v1) | misses | cross-site false alarms | mean detection delay |
+|---|---|---|---|
+| any-window heuristic (Phase 0) | 0/16 | 0/12 | 0.25 windows |
+| any-window policy (Phase 3) | 0/16 | 0/12 | 0.00 windows |
+| **repeated SPRT** | **0/16** | **0/12** | **0.62 windows** |
+
+Error rates tie again — fault presence is perfectly separable on this data (Phase 3) — at a cost of about 0.6 windows, roughly 0.1 s. The SPRT examined all 2,484 unseen healthy windows without a single false alarm.
+
+**The stress test is what a sequential test is for.** Real faulted-window evidence was injected k times in a row into the middle of each unseen healthy recording, and the smallest k that flags it was found:
+
+| injected evidence | SPRT needs | any-window rule needs |
+|---|---|---|
+| the model's **typical** (median) faulted window | **k = 2** at sites 1–3; **k = 1** at site 4 | k = 1 |
+| the model's **most confident** faulted window | **k = 1** at every site | k = 1 |
+
+So the SPRT stops one isolated, typical misclassified window from flagging a healthy machine at **three sites of four**, which the any-window rule never does. It does **not** at site 4, where the median faulted window's evidence (4.70) already exceeds A on its own, nor against any model's most confident window (6.6–9.2). Also, **6 of 16** real faults were flagged on a single window.
+
+**Why the gain is capped:** the model is so over-confident that one window's evidence is about the size of the entire decision boundary, leaving little for accumulation to do. The `EPS = 1e-6` clip is a numerical guard only and is deliberately **not** tightened to stop single-window flags — capping per-window evidence below A would be an invented constant chosen to make the problem disappear. The real fix is calibration, which Phase 2 showed this data cannot support. This supersedes the k-of-m draft on `wip/persistence-k-of-m`, which had the same weakness and no stated error targets.
+
+**Caveats printed by the command:** Wald's α/β assume independent windows and these are autocorrelated, so achieved rates are measured, never guaranteed; false alarms are cross-site, from only 4 distinct Normal recordings.
