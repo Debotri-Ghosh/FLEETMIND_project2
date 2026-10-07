@@ -37,8 +37,11 @@ from fleetmind.db.models import Depot
 from fleetmind.db.session import create_db_engine, make_session_factory
 from fleetmind.federated.client import (
     evaluate_model,
+    get_buffers,
     get_parameters,
     local_train,
+    recalibrate_bn,
+    set_buffers,
     set_parameters,
 )
 from fleetmind.ml.model import LABEL_MAP, BearingCNN, to_fft_magnitude
@@ -62,6 +65,23 @@ def average_parameters(client_params: list[list], num_samples: list[int]) -> lis
     return [(w / total).tolist() for w in accum]
 
 
+def average_buffers(client_buffers: list[list], num_samples: list[int]) -> list:
+    """Sample-weighted average of BatchNorm running statistics.
+
+    Same weighting as the parameter aggregation. `num_batches_tracked` is an
+    integer counter and is averaged here too; `set_buffers` casts it back to
+    its original dtype on load.
+    """
+    import numpy as np
+
+    total = float(sum(num_samples))
+    accum = [np.zeros_like(np.asarray(b, dtype="float64")) for b in client_buffers[0]]
+    for buffers, n in zip(client_buffers, num_samples, strict=True):
+        for i, b in enumerate(buffers):
+            accum[i] = accum[i] + np.asarray(b, dtype="float64") * n
+    return [(w / total).tolist() for w in accum]
+
+
 def run_federated(
     strategy: str = "fedavg",
     rounds: int = 10,
@@ -72,7 +92,20 @@ def run_federated(
     mu: float = 0.1,
     seed: int = 42,
     out_dir: Path | None = None,
+    aggregate_bn: bool = False,
+    recalibrate: bool = False,
 ) -> dict:
+    """Run the federated simulation.
+
+    `aggregate_bn` and `recalibrate` both default to False so the published
+    result stays byte-for-byte reproducible. They exist to test whether the
+    observed majority-class collapse is an artifact of BatchNorm running
+    statistics never reaching the global model -- see the Progress log.
+
+    aggregate_bn  also sample-weight-average the BN buffers each round.
+    recalibrate   before the final evaluation, re-estimate the global model's
+                  BN statistics from each site's own training partition.
+    """
     strategy = strategy.lower()
     if strategy not in ("fedavg", "fedprox"):
         raise SystemExit("strategy must be fedavg or fedprox")
@@ -130,6 +163,7 @@ def run_federated(
         for rnd in range(1, rounds + 1):
             base_params = get_parameters(global_model)
             client_params, num_samples = [], []
+            client_buffers: list[list] = []
             round_loss = 0.0
             for depot_id in ids:
                 client_model = BearingCNN(num_classes=len(LABEL_MAP))
@@ -144,9 +178,13 @@ def run_federated(
                     seed=seed + rnd,
                 )
                 client_params.append(get_parameters(client_model))
+                if aggregate_bn:
+                    client_buffers.append(get_buffers(client_model))
                 num_samples.append(len(partitions[depot_id]["train"]))
                 round_loss += stats["loss"] * len(partitions[depot_id]["train"])
             set_parameters(global_model, average_parameters(client_params, num_samples))
+            if aggregate_bn:
+                set_buffers(global_model, average_buffers(client_buffers, num_samples))
             per_depot = {
                 str(d): evaluate_model(global_model, partitions[d]["test"])["accuracy"] for d in ids
             }
@@ -168,13 +206,24 @@ def run_federated(
     torch.save(global_model.state_dict(), out / "global_state_dict.pt")
 
     final: dict[str, dict] = {}
+    recalibration_batches: dict[str, int] = {}
     for depot_id in ids:
+        if recalibrate:
+            # Per site, because each site's input distribution differs -- that
+            # non-IID-ness is the whole point of the study. Uses the site's
+            # TRAIN partition only; the test partition is never touched.
+            recalibration_batches[str(depot_id)] = recalibrate_bn(
+                global_model, partitions[depot_id]["train"], batch_size=bsz
+            )
         final[str(depot_id)] = evaluate_model(global_model, partitions[depot_id]["test"])
     mean_final = sum(v["accuracy"] for v in final.values()) / len(final)
     mean_base = sum(b["accuracy"] for b in baselines.values()) / len(baselines)
 
     report = {
         "strategy": strategy,
+        "aggregate_bn": aggregate_bn,
+        "recalibrate_bn": recalibrate,
+        "recalibration_batches": recalibration_batches,
         "rounds": rounds,
         "local_epochs": local_epochs,
         "prox_mu": prox_mu,
@@ -205,6 +254,17 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=3e-3)
     parser.add_argument("--mu", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--aggregate-bn",
+        action="store_true",
+        help="Also average BatchNorm running statistics each round (off by default).",
+    )
+    parser.add_argument(
+        "--recalibrate-bn",
+        action="store_true",
+        help="Re-estimate the global model's BN statistics per site before final eval.",
+    )
+    parser.add_argument("--out-dir", default=None)
     args = parser.parse_args()
     run_federated(
         args.strategy,
@@ -215,6 +275,9 @@ def main() -> None:
         args.lr,
         args.mu,
         args.seed,
+        out_dir=Path(args.out_dir) if args.out_dir else None,
+        aggregate_bn=args.aggregate_bn,
+        recalibrate=args.recalibrate_bn,
     )
 
 

@@ -52,6 +52,69 @@ def set_parameters(model: BearingCNN, parameters: list) -> None:
             p.copy_(torch.as_tensor(np.asarray(arr, dtype="float32")))
 
 
+# ── BatchNorm buffers ──────────────────────────────────────────────────
+#
+# `named_parameters()` above returns only learnable tensors, so the three
+# BatchNorm layers' running_mean / running_var / num_batches_tracked (9 buffers
+# in total) were never sent to the server and never returned to the global
+# model. A freshly constructed global model therefore evaluates in eval() mode
+# with running_mean=0 and running_var=1 -- i.e. effectively no normalisation --
+# while its aggregated weights were trained expecting normalised activations.
+#
+# These helpers make that behaviour testable rather than assumed. They are
+# OPT-IN: the default federated path is unchanged so the published result stays
+# reproducible.
+
+
+def get_buffers(model: BearingCNN) -> list:
+    """BatchNorm running statistics, in `named_buffers()` order."""
+    return [b.detach().cpu().numpy().tolist() for _, b in model.named_buffers()]
+
+
+def set_buffers(model: BearingCNN, buffers: list) -> None:
+    """Load BatchNorm running statistics, preserving each buffer's dtype.
+
+    `num_batches_tracked` is an integer counter, so it must be cast back
+    rather than written as a float.
+    """
+    import numpy as np
+
+    with torch.no_grad():
+        for (_, b), arr in zip(model.named_buffers(), buffers, strict=True):
+            b.copy_(torch.as_tensor(np.asarray(arr)).to(b.dtype))
+
+
+def recalibrate_bn(
+    model: BearingCNN,
+    rows: list[tuple[list[float], int]],
+    *,
+    batch_size: int = 64,
+    max_batches: int | None = None,
+) -> int:
+    """Re-estimate BatchNorm running statistics from data, without training.
+
+    Resets the running statistics, then does forward passes in train() mode so
+    BatchNorm re-accumulates them from the supplied rows. No gradients are
+    taken and no weight is changed -- only the buffers move. Returns the number
+    of batches seen, so a caller can assert it actually looked at something.
+    """
+    for module in model.modules():
+        if isinstance(module, nn.BatchNorm1d):
+            module.reset_running_stats()
+
+    loader = DataLoader(_RowsDataset(rows), batch_size=batch_size, shuffle=False)
+    model.train()
+    seen = 0
+    with torch.no_grad():
+        for xb, _ in loader:
+            model(xb)
+            seen += 1
+            if max_batches is not None and seen >= max_batches:
+                break
+    model.eval()
+    return seen
+
+
 def local_train(
     model: BearingCNN,
     train_rows: list[tuple[list[float], int]],
