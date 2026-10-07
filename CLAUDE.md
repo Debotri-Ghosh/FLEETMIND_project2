@@ -62,7 +62,7 @@ Product-layer tables (routers and pages **are** built, Slices A-B): `customers`,
 
 ## Real, current results (as of 2026-09-19 â€” don't regenerate unless intentionally re-running an experiment)
 
-Per-depot classifier (`mlruns/depot_{1-4}/metrics.json`): honest experiment-level split, FFT-magnitude input, class-weighted loss. Val accuracy: depot 1 = 64.8%, depot 2 = 72.5%, depot 3 = 62.7%, depot 4 = 65.7%. **These are 3-class figures against a 50% floor, not 4-class accuracy** -- the validation split holds zero Normal windows at every site and OuterRace is exactly half of it. See "The published accuracies are 3-class figures measured against a 50% floor" at the end of this file before quoting any of them.
+Per-depot classifier (`mlruns/depot_{1-4}/metrics.json`): honest experiment-level split, FFT-magnitude input, class-weighted loss. **Quote the DEPLOYED checkpoints' accuracy: depot 1 = 53.81%, depot 2 = 69.49%, depot 3 = 61.02%, depot 4 = 57.20%, mean 60.38%** (reproduce with `python -m fleetmind.decision.report`). `metrics.json`'s `best_val_acc` (64.8/72.5/62.7/65.7%) is the best *epoch*, but `ml/train.py` saves the *last* epoch, so those figures describe models never written to disk -- **do not quote them**. Project owner's decision 2026-10-07: keep the deployed checkpoints untouched and quote the honest 60.38% everywhere; do not retrain over them. **These are 3-class figures against a 50% floor, not 4-class accuracy** -- the validation split holds zero Normal windows at every site and OuterRace is exactly half of it. See "The published accuracies are 3-class figures measured against a 50% floor" at the end of this file before quoting any of them.
 
 Federated (`mlruns/federated/fedprox/federated.json`): FedProx (mu=0.1, 30 rounds) converges to mean accuracy 0.429 (vs mean local baseline 0.600) â€” a real, documented gap, not a bug. **About half that gap is a BatchNorm-transport artifact, not a property of federated averaging** -- aggregating the 9 BN buffers lifts 0.429 to 0.526; see "Correction: the federated collapse is partly a BatchNorm-transport artifact" at the end of this file before describing this result. FedAvg (no proximal term) is unstable/oscillating and should not be presented as the primary result â€” FedProx is.
 
@@ -535,9 +535,11 @@ Verified by reproducing `ml/train.py`'s split exactly (`stratified_experiment_sp
 - This also explains how a Normal recall of 0.00 could sit inside the federated result
   without disturbing any per-site accuracy figure.
 
-None of the published numbers is wrong. They are narrower than they look, and they must
-be quoted as "62.7–72.5% over three fault classes, against a 50% majority-class floor,
-with healthy machines absent from validation" rather than as bare accuracy.
+None of the published numbers is arithmetically wrong; they are narrower than they look,
+and -- as the next Progress log entry establishes -- they describe checkpoints that were
+never saved. **The figure to quote is the deployed one**, phrased as "53.8-69.5%, mean
+60.38%, over three fault classes, against a 50% majority-class floor, with healthy
+machines absent from validation" rather than as bare accuracy.
 
 ---
 

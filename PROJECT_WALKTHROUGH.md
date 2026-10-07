@@ -355,20 +355,51 @@ Six migrations, verified to run from empty against real PostgreSQL.
 
 # PART 6 — The results, said correctly
 
-### Accuracy: **62.7 – 72.5%** per site
+### Accuracy: **53.8 – 69.5%** per site, mean **60.4%**
 
-| Site | Load | Validation accuracy |
-|---|---|---|
-| Plant A | 0 HP | 64.83% |
-| Plant B | 1 HP | 72.46% |
-| Plant C | 2 HP | 62.71% |
-| Plant D | 3 HP | 65.68% |
+These are the **deployed** checkpoints — the files that produced every prediction
+and decision in the database. `python -m fleetmind.decision.report` reproduces them.
+
+| Site | Load | Deployed accuracy | Correct / held out | Margin over the 50.0% floor |
+|---|---|---|---|---|
+| Plant A | 0 HP | **53.81%** | 127 / 236 | **+3.81 pts** |
+| Plant B | 1 HP | **69.49%** | 164 / 236 | +19.49 pts |
+| Plant C | 2 HP | **61.02%** | 144 / 236 | +11.02 pts |
+| Plant D | 3 HP | **57.20%** | 135 / 236 | +7.20 pts |
+| **mean** | — | **60.38%** | 570 / 944 | **+10.38 pts** |
+
+**Three things are part of this number, not footnotes to it.**
+
+1. **It is a three-class figure.** Every site has exactly one Normal recording and
+   the split assigns a single-recording class entirely to training, so **no
+   healthy machine is ever held out**. The held-out set is the same everywhere:
+   `{OuterRace 118, Ball 59, InnerRace 59}`.
+2. **The floor is 50.0%, not 25%** — OuterRace is exactly half the held-out set.
+   Plant A beats always-guessing-OuterRace by 3.81 points, with InnerRace recall
+   0.0 and an OuterRace predicted share of 0.915.
+3. **The false-alarm rate on a healthy machine has never been measured** and
+   cannot be on this split. Absent, not zero.
+
+### Why this replaces an earlier 62.7–72.5% claim
+
+`metrics.json` stores `best_val_acc` — the best accuracy any *epoch* reached.
+`ml/train.py` calls `torch.save()` **after** the training loop with no best-epoch
+guard, so the weights on disk are the **last** epoch's. The old figures
+(64.83 / 72.46 / 62.71 / 65.68%) describe models that were never saved; the
+deployed ones score a mean 6.04 points lower. Confirmed twice — through
+`decision/probs.py`, and by replaying `train.py`'s own validation loop against the
+saved checkpoints.
+
+The checkpoints are **deliberately not retrained over**: all 4,367 stored
+predictions and decisions came from them. A properly three-way-split retrain goes
+to separate `mlruns/depot_N_v2` files so v1 and v2 can be compared on data neither
+trained on.
 
 ### ⚠ The 91.44% figure is **not** accuracy
 
 It is **in-sample agreement** — each model predicted over its own training
 windows too. Useful as an integration check, meaningless as generalisation.
-**Quote 62–72%. Never quote 91.44% as accuracy.**
+**Quote 53.8–69.5% (mean 60.4%), three-class, against a 50.0% floor. Never quote 91.44% as accuracy.**
 
 ### Federated: a negative result, stated as one
 
@@ -387,7 +418,7 @@ All three **lowered** the numbers. That is the point.
 
 | Bug | Before | After |
 |---|---|---|
-| **Data leakage** — split by window, so windows from one recording landed on both sides | ~100% (fake) | 62–72% (real) |
+| **Data leakage** — split by window, so windows from one recording landed on both sides | ~100% (fake) | 53.8–69.5% (real) |
 | **InnerRace unlearnable** — `AdaptiveAvgPool1d` destroyed the fault repetition rate | 100% misclassified as OuterRace, every site | Learnable via FFT input |
 | **FedAvg instability** — oscillated under class imbalance | unstable | stable (but degenerate — see Part 6) |
 
@@ -489,10 +520,15 @@ Largest test files: `test_auth.py` (39), `test_llm_narrative.py` (29),
 
 # PART 11 — Likely questions
 
-**"Why only 62–72%?"**
-> Because it is measured honestly. The first version reported ~100% — that was
-> data leakage from splitting by window instead of by recording. Fixing it
-> dropped the number to the truth. I would rather defend 65% that is real.
+**"Why only 60%?"**
+> Because it is measured honestly, twice over. The first version reported ~100% —
+> data leakage from splitting by window instead of by recording. Fixing that
+> dropped it to the 62–72% range read from `metrics.json`. Then we found that
+> `metrics.json` records the best *epoch*, while `train.py` saves the *last* one —
+> so even those figures described models that were never on disk. The deployed
+> checkpoints measure 53.8–69.5%, mean 60.4%. I would rather defend 60% that is
+> real, and name the 50% floor it has to clear, than quote a number twice removed
+> from the model that is actually running.
 
 **"Why is federated learning worse?"**
 > It is, and that is the finding. Per-class recall shows the global model
@@ -530,7 +566,9 @@ Largest test files: `test_auth.py` (39), `test_llm_narrative.py` (29),
 
 > FleetMind monitors industrial machines for bearing faults. Real CWRU vibration
 > data, 4,367 windows. A 1D CNN on FFT-magnitude input classifies the fault at
-> 62–72% validated accuracy. A LangGraph agent chain turns that into a risk score
+> 60.4% mean accuracy over three classes, against a 50% majority-class floor —
+> measured on the checkpoints actually deployed. A LangGraph agent chain turns
+> that into a risk score
 > and an urgency, which automatically flips a machine to maintenance and files a
 > service request an operator dispatches against. Every decision carries evidence
 > — raw signal, spectrum, the bearing physics that should corroborate it, and the

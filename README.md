@@ -58,17 +58,56 @@ Enforced at the API, not by hiding buttons — see [Authentication](#authenticat
 
 ## Results, stated honestly
 
-### Per-site classifier accuracy: **62.7 – 72.5%**
+### Per-site classifier accuracy: **53.8 – 69.5%**, mean **60.4%**
 
-Measured on an **experiment-level split**, so no window from a validation
+These are the accuracies of the **checkpoints actually deployed** — the files
+under `mlruns/depot_{1-4}/cnn_state_dict.pt` that produce every prediction,
+every agent decision and every AI-filed service request in the running system.
+Measured on an **experiment-level split**, so no window from a held-out
 recording appeared in training.
 
-| Site | Load | Validation accuracy |
-|---|---|---|
-| Plant A | 0 HP | 64.83% |
-| Plant B | 1 HP | 72.46% |
-| Plant C | 2 HP | 62.71% |
-| Plant D | 3 HP | 65.68% |
+| Site | Load | Deployed accuracy | Correct / held-out | Margin over the 50.0% floor |
+|---|---|---|---|---|
+| Plant A | 0 HP | **53.81%** | 127 / 236 | **+3.81 pts** |
+| Plant B | 1 HP | **69.49%** | 164 / 236 | +19.49 pts |
+| Plant C | 2 HP | **61.02%** | 144 / 236 | +11.02 pts |
+| Plant D | 3 HP | **57.20%** | 135 / 236 | +7.20 pts |
+| **mean** | — | **60.38%** | 570 / 944 | **+10.38 pts** |
+
+Reproduce with `python -m fleetmind.decision.report` from `backend/`.
+
+#### ⚠ Three caveats that must travel with these numbers
+
+**1. They are three-class figures, not four.** Each site has exactly one Normal
+recording, and the stratified experiment split assigns a single-recording class
+entirely to training — so **no healthy machine is ever held out, at any site**.
+The held-out set is identical everywhere: `{OuterRace 118, Ball 59, InnerRace 59}`.
+The model emits four classes; only three are ever tested.
+
+**2. The floor is 50.0%, not 25%.** OuterRace is exactly half the held-out set,
+so always predicting OuterRace scores 50.00%. That is the baseline these figures
+must clear. Plant A clears it by 3.81 points.
+
+**3. The false-alarm rate on a healthy machine has never been measured**, and
+cannot be on this split, for the reason in caveat 1. For a predictive-maintenance
+product that is the commercially decisive number. It is absent, not zero.
+
+#### Why these differ from an earlier 62.7–72.5% claim
+
+Earlier versions of this README quoted 64.83 / 72.46 / 62.71 / 65.68% from
+`mlruns/depot_{1-4}/metrics.json`. Those are `best_val_acc` — the best accuracy
+any *epoch* reached during training. `ml/train.py` calls `torch.save()` after the
+training loop with no best-epoch guard, so the weights that were saved are the
+**last** epoch's, not the best one's. The earlier figures therefore describe
+models that were never written to disk. The deployed checkpoints score a mean
+6.04 points lower. Confirmed twice: through `fleetmind/decision/probs.py`, and by
+replaying `ml/train.py`'s own validation loop and its own dataset class against
+the saved checkpoints.
+
+The deployed checkpoints are deliberately left in place rather than retrained,
+because all 4,367 stored predictions and decisions were produced by them and
+retraining would invalidate every downstream figure. The honest measured number
+is quoted instead.
 
 ### Federated: a negative result, presented as one
 
@@ -87,7 +126,7 @@ That 91.44% is **in-sample model-vs-ground-truth agreement** — each site's mod
 predicted over all of its own windows, including ones it trained on. It is a
 useful integration check and a meaningless generalisation claim.
 
-**Quote 62.7–72.5%. Never quote 91.44% as accuracy.**
+**Quote 53.8–69.5% (mean 60.4%), three-class, against a 50.0% floor. Never quote 91.44% as accuracy.**
 
 Full detail, including the three real bugs that *lowered* these numbers, is in
 [`FleetMind_Implementation_Report.md`](FleetMind_Implementation_Report.md).

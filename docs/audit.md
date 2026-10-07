@@ -14,6 +14,7 @@
 > | §2.4 CLAUDE.md framing predates the product statement | **Closed** — Slice E reframed the copy; CLAUDE.md's header sections were rewritten on 2026-10-02. |
 > | §3 Legacy `depot` rename inventory | **Deliberately deferred** — see `docs/adr/0001`. User-facing copy says "site"; the schema keeps `depot`. Re-audited 2026-10-02: zero vehicle/ride/logistics language remains in code, UI, README or the live database. |
 > | §1.1/§1.4 counts (10 tables, 4 migrations, 137 tests) | **Superseded** — now 12 tables, 6 migrations, 244 tests. |
+> | §6 "62.7-72.5% val accuracy" (line 118) | **Superseded 2026-10-07.** Those were `metrics.json`'s `best_val_acc` (best epoch), but `ml/train.py` saves the *last* epoch, so they describe models never written to disk. The deployed checkpoints measure 53.8 / 69.5 / 61.0 / 57.2%, mean **60.38%** -- three classes, against a 50.0% majority-class floor. See CLAUDE.md's Phase 0 entry. |
 > | §0 / §5 Product spec missing, gap analysis blocked | **Still true.** No `docs/PRODUCT_SPEC.md` exists. The product statement at the top of `CLAUDE.md` is the de facto spec and was written after this audit. |
 >
 > The one finding below that was **not** acted on and is not merely historical

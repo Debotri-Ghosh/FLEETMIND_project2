@@ -202,9 +202,17 @@ Dashboard → **Model Performance: Local vs. Federated**.
 
 | | |
 |---|---|
-| Per-site validation accuracy | 64.8% / 72.5% / 62.7% / 65.7% |
-| Mean local baseline | 60.0% |
+| Per-site accuracy, **deployed checkpoints** | 53.8% / 69.5% / 61.0% / 57.2% — mean **60.4%** |
+| Majority-class floor (always OuterRace) | **50.0%** |
+| Mean local baseline, federated study | 60.0% |
 | FedProx, 30 rounds, mu=0.1 | 42.9% |
+
+> Say the floor out loud. OuterRace is exactly half the held-out set, so always
+> guessing OuterRace scores 50%. Plant A's deployed model beats that by 3.8
+> points; Plant B by 19.5. And it is a **three-class** number — each site has one
+> Normal recording and the split keeps it entirely in training, so no healthy
+> machine is ever held out. The false-alarm rate on a healthy machine is
+> therefore **unmeasured**, not zero.
 
 > The federated result is *worse* than local training, and that is the real
 > number. It is a documented phenomenon under non-IID per-site class imbalance,
@@ -212,8 +220,8 @@ Dashboard → **Model Performance: Local vs. Federated**.
 > oscillated round to round, which is why FedProx is the primary result rather
 > than FedAvg.
 
-Two bugs worth mentioning if the accuracy numbers are questioned, because both
-*lowered* them:
+Three bugs worth mentioning if the accuracy numbers are questioned, because all
+three *lowered* them:
 
 1. **Data leakage.** The original split was per-window, so windows from the
    same recording landed on both sides and accuracy read as a fake 100%. Fixed
@@ -223,6 +231,16 @@ Two bugs worth mentioning if the accuracy numbers are questioned, because both
    fault-repetition rate that separates InnerRace from OuterRace — the
    confusion matrix showed InnerRace 100% misclassified as OuterRace at every
    site. Fixed by feeding a 512-bin FFT magnitude instead of raw samples.
+3. **The saved checkpoint was the last epoch, not the best one.** `metrics.json`
+   records `best_val_acc` — the best accuracy any epoch *reached* — but
+   `ml/train.py` calls `torch.save()` after the loop with no best-epoch guard.
+   So the earlier 62.7–72.5% figures described models that were never written to
+   disk. The checkpoints that are actually deployed score a mean 6.0 points
+   lower, which is why §5 now quotes 53.8–69.5%. **If you are asked why the old
+   number is gone, this is the answer — and it is a strong one**: we measured the
+   model that is running, not the one the log remembered. The checkpoints were
+   deliberately left in place rather than retrained, because all 4,367 stored
+   predictions and decisions came from them.
 
 ---
 
@@ -237,8 +255,8 @@ The database holds 4,367 predictions and 3,993 match the documented label —
 91.44%, with 374 disagreements (mostly InnerRace→Ball, 163, and
 Ball→OuterRace, 133). But each site's model predicted over *all* of its own
 windows, including ones it trained on. **The honest generalisation numbers are
-the 62.7–72.5% validation accuracies in §5.** If someone quotes 91% back at
-you as model accuracy, correct them.
+the 53.8–69.5% (mean 60.4%) accuracies in §5, three-class, against a 50.0%
+floor.** If someone quotes 91% back at you as model accuracy, correct them.
 
 **2. The GAN augmentation has a known mismatch, unfixed.**
 

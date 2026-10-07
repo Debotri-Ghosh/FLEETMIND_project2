@@ -107,7 +107,7 @@ samples milliseconds apart from the same rotating machine.
 `augmentation/run.py` and `federated/run.py` were already using correctly. No
 recording contributes to both sides.
 
-**Before → after.** ~100% (fictitious) → the honest 62.7–72.5% range in §3.
+**Before → after.** ~100% (fictitious) → the honest 53.8–69.5% range in §3.
 
 **Standing rule.** Any new training code must split by experiment ID, never by
 individual window.
@@ -156,20 +156,68 @@ result.
 
 ## 3. Results — stated unambiguously
 
-### 3.1 The headline number: 62–72% per-site validation accuracy
+### 3.1 The headline number: 53.8–69.5% per-site accuracy, mean 60.4%
 
-Verified by reading `mlruns/depot_{1..4}/metrics.json` directly:
+These are the accuracies of the **deployed checkpoints** —
+`mlruns/depot_{1..4}/cnn_state_dict.pt`, the files that produced every one of the
+4,367 predictions and decisions in the database. Measured by
+`python -m fleetmind.decision.report`:
 
-| Site | Motor load | Validation accuracy | Train / val windows |
+| Site | Motor load | Deployed accuracy | Correct / held out | Margin over the 50.0% floor | Train / held-out windows |
+|---|---|---|---|---|---|
+| Plant A | 0 HP | **53.81%** | 127 / 236 | **+3.81 pts** | 766 / 236 |
+| Plant B | 1 HP | **69.49%** | 164 / 236 | +19.49 pts | 885 / 236 |
+| Plant C | 2 HP | **61.02%** | 144 / 236 | +11.02 pts | 885 / 236 |
+| Plant D | 3 HP | **57.20%** | 135 / 236 | +7.20 pts | 887 / 236 |
+| **mean** | — | **60.38%** | 570 / 944 | **+10.38 pts** | — |
+
+**This 53.8–69.5% range, mean 60.38%, is the project's accuracy claim.** Three
+qualifications are part of the claim, not footnotes to it.
+
+**It is a three-class figure.** Each site holds exactly one Normal recording, and
+`stratified_experiment_split` assigns a single-recording class entirely to
+training — so no healthy machine is ever held out at any site. The held-out set is
+identical everywhere: `{OuterRace 118, Ball 59, InnerRace 59}`. The model emits
+four classes and only three are ever tested.
+
+**The floor is 50.0%, not 25%.** OuterRace is exactly half the held-out set, so
+always predicting OuterRace scores 50.00%. Plant A's deployed model clears that
+by 3.81 points, with InnerRace recall 0.0 and an OuterRace predicted share of
+0.915 — it is very nearly the same majority-class predictor criticised in §3.2.
+
+**The false-alarm rate on a healthy machine has never been measured** and cannot
+be on this split. It is absent, not zero; `fleetmind/decision/quality.py` reports
+it as `None` with a machine-readable reason rather than as `0.0`.
+
+#### 3.1.1 Why these replace an earlier 62.7–72.5% claim
+
+An earlier version of this report quoted 64.83 / 72.46 / 62.71 / 65.68% read from
+`mlruns/depot_{1..4}/metrics.json`. That field is `best_val_acc`: the best
+accuracy any *epoch* reached. `ml/train.py` tracks it with
+`best_acc = max(best_acc, acc)` and then calls `torch.save(model.state_dict(), …)`
+**after** the loop, outside any best-epoch guard — there is no best-model
+checkpointing at all. The saved weights are therefore the **final** epoch's, and
+the earlier figures describe models that were never written to disk.
+
+| Site | `metrics.json` `best_val_acc` | the saved checkpoint actually scores | gap |
 |---|---|---|---|
-| Plant A | 0 HP | **64.83%** | 766 / 236 |
-| Plant B | 1 HP | **72.46%** | 885 / 236 |
-| Plant C | 2 HP | **62.71%** | 885 / 236 |
-| Plant D | 3 HP | **65.68%** | 887 / 236 |
+| Plant A | 0.6483 | **0.5381** | −0.1102 |
+| Plant B | 0.7246 | **0.6949** | −0.0297 |
+| Plant C | 0.6271 | **0.6102** | −0.0169 |
+| Plant D | 0.6568 | **0.5720** | −0.0847 |
+| mean | 0.6642 | **0.6038** | **−0.0604** |
 
-**This 62.7–72.5% range is the project's accuracy claim.** It is measured on an
-experiment-level split, so no window from a validation recording appeared in
-training. It is modest, and it is real.
+Confirmed two independent ways: through `fleetmind/decision/probs.py`, and by
+replaying `ml/train.py`'s *own* validation loop and its *own* `_TorchDataset`
+against the saved checkpoints — both give 0.5381 / 0.6949 / 0.6102 / 0.5720, so
+the gap cannot be an evaluation difference.
+
+**The checkpoints are deliberately not retrained over.** All 4,367 stored
+predictions and decisions, the six flagged machines and both LLM narratives were
+produced by these exact files; retraining would silently invalidate every
+downstream figure in this report. The honest measured number is quoted instead.
+A properly split retrain is being done separately, to new `mlruns/depot_N_v2`
+checkpoints, so that v1 and v2 can be compared on data neither has trained on.
 
 ### 3.2 Federated: FedProx converged to a majority-class predictor
 
@@ -202,8 +250,8 @@ finding in the project. It should be presented as one.
 
 > ### ⚠ Do not quote 91.44% as accuracy.
 > It is **in-sample model-vs-ground-truth agreement**, not validated accuracy.
-> The accuracy figure is **62.7–72.5%** (§3.1). Conflating the two overstates
-> the model by roughly 20–29 points.
+> The accuracy figure is **53.8–69.5%, mean 60.38%** (§3.1). Conflating the two
+> overstates the model by roughly 22–38 points.
 
 Verified by SQL across all 4,367 predictions:
 
@@ -573,7 +621,8 @@ Stated as plainly here as the project states it internally.
 
 - **The dataset.** 4,367 windows from 64 real CWRU recordings. No synthetic
   data anywhere except the documented GAN augmentation step below.
-- **The classifier and its accuracy.** 62.7–72.5% on an experiment-level split.
+- **The classifier and its accuracy.** 53.8–69.5% (mean 60.38%) on an
+  experiment-level split — three classes, against a 50.0% majority-class floor.
 - **The federated result**, including its failure (§3.2).
 - **The predictions and decisions.** 4,367 of each, regenerated from the current
   models and verified by direct SQL, not app-level reads.
