@@ -737,3 +737,33 @@ v2-best and v2-last give **identical numbers at sites 2 and 4** — correct, not
 An expected-cost policy consumes a posterior and would inherit this miscalibration directly. Phase 3 should not assume calibrated probabilities are available; the realistic options are to work from the uncalibrated posterior and state that, or to pool calibration data across sites and lose the per-site specificity. That is a decision to take with the evidence above, not an implementation detail.
 
 Outputs: `mlruns/decision/phase2/{depot_1..4,summary}.json` (gitignored, like all of `mlruns/`).
+
+2026-10-07 — **Recording-level decisions: the unit the product actually acts on, measured for the first time** — verified via: a real `python -m fleetmind.decision.recording` run against the deployed v1 checkpoints and the live archive, `pytest tests/test_decision_recording.py` (12 new), `ruff check` / `mypy fleetmind` clean — result: pass, and it exposes a class-level failure that window-level accuracy conceals.
+
+**Why.** Every accuracy figure this project quotes is a *window*-level figure, and a window is 0.17 s of vibration. The product flags a *machine*. So for each held-out recording the model's logits are averaged across its windows, the argmax taken, and that one decision scored against the recording's documented label.
+
+| site | window-level | recording-level (logit averaging) |
+|---|---|---|
+| 1 | 127/236 = 0.5381 | **2/4** = 0.5000 |
+| 2 | 164/236 = 0.6949 | **3/4** = 0.7500 |
+| 3 | 144/236 = 0.6102 | **3/4** = 0.7500 |
+| 4 | 135/236 = 0.5720 | **2/4** = 0.5000 |
+| **all** | **570/944 = 0.6038** | **10/16 = 0.6250** |
+
+**Do not read the +2.1 points as an improvement.** n = 16 recordings, so **one recording is 6.25% of the overall figure** — the entire difference is a third of a single recording flipping. All three aggregation rules (logit mean, probability mean, majority vote) give **identically 10/16**, so the choice of rule is immaterial here and is reported rather than hidden.
+
+**The real finding is the per-class breakdown across all 16 recordings:**
+
+| true class | recordings correct | the misses |
+|---|---|---|
+| OuterRace | **8/8 = 1.000** | — |
+| Ball | 2/4 = 0.500 | Ball -> OuterRace x2 |
+| **InnerRace** | **0/4 = 0.000** | InnerRace -> Ball x3, InnerRace -> OuterRace x1 |
+
+**Not one held-out InnerRace recording is correctly diagnosed, at any site.** Window-level InnerRace recall (0.000–0.085) already hinted at this, but aggregating to the decision the product makes removes any ambiguity: on this evidence the deployed system cannot identify an inner-race fault at all, and it mistakes it for Ball three times out of four. This is worth stating against the documented history — the FFT-magnitude fix is credited with making InnerRace *learnable*, and it did improve training; it did not make it identifiable on held-out recordings.
+
+**Normal is absent from the held-out set at every site, so this is a three-class figure**, printed in the command's own output along with n and the "one recording = 25% of a site's score" warning.
+
+**A test caught an error in my own stated reasoning.** `recording.py`'s docstring originally claimed that averaging *probabilities* lets one saturated window dominate and that logit averaging avoids it. The opposite is true, and `test_one_extreme_logit_hijacks_logit_averaging_but_not_the_other_rules` proves it: with one window at logit 40 and nine at logit 1.0 for another class, logit averaging picks the outlier's class while probability averaging cannot, because a bounded probability contributes at most 1/n. Logit averaging is the *fragile* rule. The docstring is corrected and the test pins the real behaviour; logit averaging is still reported first because this task specified it.
+
+Read-only: no database writes, no API, pipeline or UI wiring. Outputs in `mlruns/decision/recording_level/` (gitignored). Guards: `aggregate([])` and `RecordingScore.accuracy` on an empty score both raise rather than computing 0/0, pinned by `test_scoring_zero_recordings_raises_rather_than_reporting_an_accuracy`; logit averaging refuses posteriors carrying no logits rather than scoring them as zeros.
