@@ -628,7 +628,7 @@ Verified two independent ways: by the new `decision/probs.py` path, and by repli
 
 **Housekeeping note, not caused by this work:** the live DB is **no longer at replay-zero**, contrary to the state the Slice O entry says it was left in — all 4,367 windows are released, with 4,367 predictions, 4,367 decisions, 10 service requests and 6 equipment in maintenance. Something ran the replay to completion between then and now. `scripts/start-demo.ps1` rewinds it when the demo is next brought up.
 
-2026-10-07 — Decision Intelligence **Phase 1** — a properly split retrain with real best-epoch selection, and **a result that cuts both ways: v2 loses 5.0 accuracy points but is near-perfectly calibrated** — verified via: `pytest` (298 passing, 17 new in `tests/test_decision_phase1.py`), `ruff check .` / `ruff format --check .` / `mypy fleetmind` (clean, 74 source files), four real 20-epoch training runs against the live archive, a real `python -m fleetmind.decision.compare` run, and SHA-256 fingerprints proving the deployed v1 checkpoints were never written to — result: pass, and the outcome is **not** the one the Phase 0 finding implied.
+2026-10-07 — Decision Intelligence **Phase 1** — a properly split retrain with real best-epoch selection, and **a result that cuts both ways: v2 loses 5.0 accuracy points and roughly halves ECE, while Brier barely moves** — verified via: `pytest` (298 passing, 17 new in `tests/test_decision_phase1.py`), `ruff check .` / `ruff format --check .` / `mypy fleetmind` (clean, 74 source files), four real 20-epoch training runs against the live archive, a real `python -m fleetmind.decision.compare` run, and SHA-256 fingerprints proving the deployed v1 checkpoints were never written to — result: pass, and the outcome is **not** the one the Phase 0 finding implied.
 
 **The owner's decision, recorded:** keep the deployed checkpoints untouched and quote the honest 60.38% everywhere; do not retrain over them. Every per-site accuracy in `README.md`, `FleetMind_Implementation_Report.md`, `PROJECT_WALKTHROUGH.md` and `DEMO_SCRIPT.md` now reads 53.81 / 69.49 / 61.02 / 57.20%, mean 60.38%, with the three-class and 50.0%-floor caveats attached as part of the claim (commit `682c3d8a`, docs only).
 
@@ -653,10 +653,23 @@ That choice has a cost, and it is stated rather than hidden: **v2 trains on ~30%
 | v2-best | 0.5540 | **0.0966** | **+0.0065** | **0.499** | **0.153** |
 
 - **v1's accuracy edge is bought by leaning on the majority class.** It gives **69.2%** of its test predictions to OuterRace, which is **50.0%** of the test set. v2-best gives **49.9%** — matching the true share almost exactly. At site 1, v1's OuterRace share is **0.915**.
-- **v2-best is essentially perfectly calibrated**: it claims 56.1% and delivers 55.4%, an over-confidence of **+0.0065** against v1's **+0.2101** — a 32-fold reduction, with ECE less than half.
+- **v2-best is better calibrated, by a factor of about 2.2, not by a factor of 32.**
+  Mean **ECE 0.2146 -> 0.0966** (2.22x lower). Mean **Brier 0.5830 -> 0.5726** — a 1.8%
+  improvement, i.e. **barely changed**. Mean **signed over-confidence +0.2101 -> +0.0065**.
+  **Do not quote that last ratio as a 32-fold improvement**: it is a *signed* mean, so
+  over-confident and under-confident bins cancel, and a model with large errors in both
+  directions can sit near zero. ECE takes the absolute gap per bin and is the figure to
+  quote; Brier is a proper scoring rule and says the overall probabilistic quality moved
+  very little.
+- **The ECE gain is not uniform across sites, and the mean hides that.** Per site, v1 ->
+  v2-best: **0.3041 -> 0.0648** (site 1) and **0.2539 -> 0.0787** (site 4) are large; site 2
+  is **0.0866 -> 0.0817**, a wash; and at site 3 v2-*last* is marginally **worse** than v1
+  (0.2139 -> 0.2150) while v2-best improves it to 0.1611. So the honest statement is
+  "clearly better at two of four sites, unchanged at one, mixed at one" — not "better
+  calibrated" without qualification.
 - **InnerRace recall rises 0.042 → 0.153**, a 3.6x improvement on the class the FFT fix was specifically meant to make learnable. v1 at site 1 never gets a single InnerRace window right (recall **0.000**).
 
-**So the honest reading: the owner's decision holds on accuracy, and now has a measured reason rather than an inertia argument — but v2 is the better-behaved model on every axis except the one the project has been quoting.** Phase 2 (conformal prediction) and Phase 3 (expected-cost policy) both consume a *posterior*, not a label, and they are only sound on a calibrated one. A model that is 5 points less accurate and 32 times less over-confident is the better foundation for them. That trade should be made deliberately when those phases land, not now.
+**So the honest reading: the owner's decision holds on accuracy, and now has a measured reason rather than an inertia argument — but v2 is the better-behaved model on every axis except the one the project has been quoting.** Phase 2 (conformal prediction) and Phase 3 (expected-cost policy) both consume a *posterior*, not a label, and they are only sound on a calibrated one. A model that is 5 points less accurate, with roughly half the ECE and a near-unchanged Brier, is the better-shaped input for them -- though the Brier result is a warning that calibration alone has not made the posteriors much more informative overall. That trade should be made deliberately when those phases land, not now.
 
 **Honest caveat on the noise floor:** one seed, four sites, 236 test windows each, 8 training recordings. Site 3 swings −0.186 on the data reduction alone, so differences of a few points are not separable from seed variance. The calibration gap (+0.2101 vs +0.0065) and the degeneracy gap (0.692 vs 0.499) are large enough to be believable; the 5-point accuracy gap is not, on its own. A grouped k-fold over several seeds is what would settle it.
 
