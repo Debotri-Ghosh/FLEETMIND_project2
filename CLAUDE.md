@@ -784,3 +784,22 @@ All four deployed checkpoints' SHA-256 were confirmed unchanged by the merge.
 **`PRESENTATION_NUMBERS.md`** — a one-page defence sheet at the repo root, with **every figure re-verified against the repository rather than copied from any earlier document**. Four sections: numbers safe to quote, each with the command or file that produces it (deployed per-site accuracy 53.81/69.49/61.02/57.20, overall 60.38% = 570/944, three-class against a 50.0% floor; recording-level 10/16 with the InnerRace 0/4 breakdown; federated 42.86% as run and 52.60% with BatchNorm buffers aggregated, both below the 60.05% local baseline); numbers not to quote (91.44% as accuracy — re-verified live as 3,993/4,367 = 91.4358%; 62.7–72.5%; any 32-fold calibration claim); things not to claim at all (cloud deployment, live sensors, learned agents, federated beating local, any ROI figure, and the defect frequencies explaining the model); and one honest paragraph on Phase 2.
 
 Confirmed by grep that the three forbidden figures appear in that file **only** inside the "do not quote" table, never as a claim.
+
+2026-10-07 — **Final state: all four tasks complete, `main` at `a7e2f351`, demo up and rewound to zero** — verified by bringing the demo up with `scripts/start-demo.ps1` and then checking it with commands that do **not** go through the script.
+
+| Check | Result |
+|---|---|
+| `GET /livez` **without** a token | `200 {"status":"alive"}` |
+| `GET /health` **without** a token | `401 {"detail":"not authenticated"}` |
+| `GET /health` **with** a token | `200 {"status":"ok","database":"connected","version":"0.1.0"}` |
+| Admin login | token issued (208 chars); `/auth/me` -> `admin@fleetmind.example.com role=admin` |
+| `/replay/status` | `released 0/4367, processed 0, pending 0, complete false, running false, ticks 0` |
+| Direct SQL | predictions 0, decisions 0, AI requests 0, equipment **8 active / 0 maintenance**, windows released 0, users 5 |
+| Frontend | `/login` serves 8,034 bytes referencing 8 `/_next/` assets; **all 8 fetched 200** — the page genuinely loads, not merely returns 200 |
+| Deployed checkpoints | all four SHA-256 **unchanged** across every task in this session |
+
+**Task 0 found no bug.** Admin sees `GET /equipment` -> **8** and `GET /depots` -> **4**; `operator.a` sees **2** machines, both at `depot_id=1`, with `/auth/me` reporting `role=operator depot_id=1 site=Plant A`. A real browser signed in as admin showed **all four sites** (4 table rows, Plant A-D at 0/1/2/3 HP), the live board and the replay controls, with **zero console errors and zero failed requests**. Note for future sessions: an operator legitimately sees 4 rows from `/depots`, because that endpoint is public research data over the CWRU archive — `/equipment` is what carries the row scope, and the frontend shows only the operator's own site labelled "My site".
+
+**One real wart in `scripts/start-demo.ps1`, found by running it and not fixed (out of this session's scope).** It frees port 8000 by tree-killing whatever holds it, and on this machine three processes bind that port: our uvicorn, `wslrelay.exe`, and **`com.docker.backend.exe`** (Docker Desktop binds `0.0.0.0:8000`). The script therefore attempted `taskkill /T /F` on Docker Desktop's backend. Windows refused this time (`could not be terminated`), the script reported it honestly and the port still came free — but on a machine where that kill succeeds, **running the demo script would take Docker Desktop down**. The fix is to match the uvicorn command line as `Stop-OrphanedNextDev` already does for `next dev`, rather than killing by port holder alone. Recorded as a known issue, not changed.
+
+Session boundary: nothing is left unfinished. Tasks 0-4 are all complete and committed; `main` is `a7e2f351` with the pre-decision state recoverable at tag `pre-decision-merge` (`c7167e13`).
