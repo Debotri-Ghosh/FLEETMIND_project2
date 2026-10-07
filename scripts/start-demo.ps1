@@ -33,7 +33,8 @@
 [CmdletBinding()]
 param(
     [switch]$NoReset,
-    [switch]$SkipFrontend
+    [switch]$SkipFrontend,
+    [switch]$AllowDockerPortConflict
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,26 +57,61 @@ function Write-Warn2 { param($m) Write-Host "   !   $m" -ForegroundColor Yellow 
 function Write-Fail  { param($m) Write-Host "   X   $m" -ForegroundColor Red }
 
 # ── free a port, carefully ────────────────────────────────────────────
-function Stop-PortListener {
-    param([int]$Port)
+function Get-OurPortListeners {
+    <#
+        PIDs bound to $Port whose COMMAND LINE identifies them as this
+        project's own server. The command line, not the port alone.
 
-    # Only ever targets the PID actually bound to this port. Never kills by
-    # process name -- an unrelated Streamlit app runs Python on this machine.
-    # SilentlyContinue, not try/catch: with $ErrorActionPreference = 'Stop' a
-    # caught exception is still written to the error stream, so a transcript
-    # or a recording console shows red "TerminatingError" text for what is
-    # simply "nothing is listening" -- alarming to read mid-demo.
+        Killing every holder of a port is unsafe on this machine, and that was
+        a real defect here: Docker Desktop binds 0.0.0.0:8000 and wslrelay.exe
+        binds [::1]:8000, so an earlier version of this function attempted
+        `taskkill /T /F` on com.docker.backend.exe every time it ran. Windows
+        happened to refuse, but on a machine where it succeeds, starting the
+        demo would take Docker Desktop down.
+
+        Those bindings also never needed freeing: the backend binds
+        127.0.0.1:8000 specifically and coexists with Docker's 0.0.0.0:8000
+        perfectly well -- it did so for an entire working session. So the
+        correct behaviour is to leave anything we did not start alone.
+    #>
+    param([int]$Port, [string]$Match)
+
     $pids = @(
         Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty OwningProcess -Unique
     )
-
-    if (-not $pids) { Write-Ok "port $Port already free"; return }
-
+    $ours = @()
+    $theirs = @()
     foreach ($processId in $pids) {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction SilentlyContinue
+        if (-not $proc) { continue }
+        if ($proc.CommandLine -and $proc.CommandLine -match $Match) {
+            $ours += $proc
+        } else {
+            $theirs += $proc
+        }
+    }
+    return @{ Ours = $ours; Theirs = $theirs }
+}
+
+function Stop-PortListener {
+    param([int]$Port, [string]$Match)
+
+    # SilentlyContinue, not try/catch: with $ErrorActionPreference = 'Stop' a
+    # caught exception is still written to the error stream, so a transcript
+    # or a recording console shows red "TerminatingError" text for what is
+    # simply "nothing is listening" -- alarming to read mid-demo.
+    $found = Get-OurPortListeners -Port $Port -Match $Match
+
+    foreach ($proc in $found.Theirs) {
+        Write-Ok "port $Port also held by $($proc.Name) (PID $($proc.ProcessId)) - not ours, left alone"
+    }
+
+    if (-not $found.Ours) { Write-Ok "port $Port has no FleetMind listener"; return }
+
+    foreach ($proc in $found.Ours) {
         try {
-            $proc = Get-Process -Id $processId -ErrorAction Stop
-            Write-Warn2 "port $Port held by $($proc.ProcessName) (PID $processId) - stopping it"
+            Write-Warn2 "port $Port held by our $($proc.Name) (PID $($proc.ProcessId)) - stopping it"
             # taskkill /T, not Stop-Process: `npm run dev` is a process TREE
             # (cmd -> npm -> node "next dev"), and only the outermost one holds
             # the port. Stop-Process kills that one and orphans the `next dev`
@@ -83,20 +119,33 @@ function Stop-PortListener {
             # orphaned dev servers then fight over the same directory: one
             # writes the chunks, the other serves and 404s every one of them,
             # so the page loads as blank HTML with no JS or CSS.
-            & taskkill.exe /PID $processId /T /F 2>&1 | Out-Null
+            & taskkill.exe /PID $proc.ProcessId /T /F 2>&1 | Out-Null
         } catch {
-            Write-Warn2 "could not stop PID ${processId}: $($_.Exception.Message)"
+            Write-Warn2 "could not stop PID $($proc.ProcessId): $($_.Exception.Message)"
         }
     }
 
-    # Give the socket a moment to actually release before we bind it again.
+    # Wait for OUR listener to go, not for the port to be empty: a third-party
+    # holder we deliberately left alone would otherwise make this always warn.
     for ($i = 0; $i -lt 20; $i++) {
         Start-Sleep -Milliseconds 250
-        $still = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
-        if (-not $still) { Write-Ok "port $Port free"; return }
+        $still = Get-OurPortListeners -Port $Port -Match $Match
+        if (-not $still.Ours) { Write-Ok "port $Port free of FleetMind listeners"; return }
     }
-    Write-Warn2 "port $Port still shows a listener; continuing anyway"
+    Write-Warn2 "port $Port still shows a FleetMind listener; continuing anyway"
 }
+
+# Command-line patterns identifying this project's own servers. Deliberately
+# specific: 'uvicorn' alone would match any uvicorn app on the machine, and
+# 'node' alone would match every Node process.
+$BackendMatch  = 'uvicorn.*fleetmind\.api\.main'
+# Matches every shape of this project's Next process tree, including the
+# `start-server.js` child that actually holds port 3000, which is at a
+# different path from `next/dist/bin/next`. Keyed on the project directory so
+# it survives a Next version bump, and `[\/]+` accepts BACKSLASHES -- the
+# previous pattern used `[\/]`, which is forward-slash only and therefore
+# could never match a Windows path.
+$FrontendMatch = 'fleetmind.frontend.node_modules.*next'   # '.' matches \ and / alike -- no escaping to get wrong
 
 # ── wait for a URL to answer ──────────────────────────────────────────
 function Wait-ForUrl {
@@ -123,6 +172,13 @@ function Wait-ForUrl {
             }
         } catch {
             $lastErr = $_.Exception.Message
+            # A 404 on a route this project definitely serves is not "not up
+            # yet" -- it is a DIFFERENT server answering on this port. Seen for
+            # real: Docker Desktop was running a stale, pre-auth FleetMind API
+            # container publishing 0.0.0.0:8000, which has no /livez route.
+            if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
+                $lastErr = "HTTP 404 -- something other than FleetMind's current $Name is answering on this port (see the Docker warning above)"
+            }
         }
         Start-Sleep -Seconds 2
     }
@@ -139,6 +195,37 @@ if (-not (Test-Path $Python)) {
     exit 1
 }
 Write-Ok "venv python: $Python"
+
+# Docker containers publishing our ports. These are WARNED about, never stopped:
+# they belong to whoever started them, and a running compose stack may be
+# deliberate. But they must be visible, because a container on 0.0.0.0:8000
+# shadows this backend for every `localhost` / [::1] client, and answers on
+# 127.0.0.1 until uvicorn has bound -- which looks exactly like a broken app.
+$docker = Get-Command docker -ErrorAction SilentlyContinue
+if ($docker) {
+    $published = @()
+    try {
+        $published = @(& docker ps --format '{{.Names}}|{{.Image}}|{{.Ports}}' 2>$null |
+            Where-Object { $_ -match ':(8000|3000)->' })
+    } catch { $published = @() }
+    foreach ($row in $published) {
+        $parts = $row -split '\|'
+        Write-Warn2 "Docker container '$($parts[0])' ($($parts[1])) publishes a FleetMind port: $($parts[2])"
+    }
+    if ($published) {
+        Write-Warn2 'It shadows this demo for every localhost/[::1] client, and on this machine'
+        Write-Warn2 "the backend probe below then saw only that container's 404s for 120 s"
+        Write-Warn2 'even though uvicorn had bound 127.0.0.1:8000 (cause not yet established).'
+        if (-not $AllowDockerPortConflict) {
+            Write-Fail 'Refusing to start a demo that cannot be trusted. Containers are never stopped'
+            Write-Fail 'by this script -- they belong to whoever started them. Either:'
+            Write-Host '         docker compose stop            (reversible: docker compose start)' -ForegroundColor Red
+            Write-Host '       or re-run with -AllowDockerPortConflict to proceed anyway.' -ForegroundColor Red
+            exit 2
+        }
+        Write-Warn2 '-AllowDockerPortConflict given: continuing despite the conflict.'
+    }
+}
 
 if (-not $SkipFrontend) {
     # Node is installed user-scope via winget on this machine, not in Program
@@ -164,25 +251,98 @@ New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 # A `next dev` child can survive its parent and keep writing to .next without
 # holding port 3000, so freeing the port alone does not find it. Matched on the
 # command line so only THIS project's dev servers are touched.
-function Stop-OrphanedNextDev {
-    $orphans = @(
-        Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.CommandLine -and $_.CommandLine -match 'next[\/]dist[\/]bin[\/]next' }
-    )
-    foreach ($o in $orphans) {
-        Write-Warn2 "stopping stray next dev (PID $($o.ProcessId))"
-        & taskkill.exe /PID $o.ProcessId /T /F 2>&1 | Out-Null
+function Assert-PatternCanMatch {
+    <#
+        A sweep that finds nothing must prove it was capable of finding
+        something. The previous version of Stop-OrphanedNextDev matched
+        'next[\/]dist[\/]bin[\/]next' -- a character class holding only a
+        FORWARD slash -- against Windows command lines full of backslashes. It
+        could never match anything, so it printed "no stray next dev processes"
+        on every run of its entire existence while sweeping nothing at all.
+
+        This is the fourth check in this project found incapable of firing. The
+        standing rule is that a check asserting "nothing is wrong" must also
+        assert that it looked at something, so each pattern is verified against
+        a known-good sample before its result is trusted.
+    #>
+    param([string]$Pattern, [string]$Sample, [string]$Name)
+
+    if ($Sample -notmatch $Pattern) {
+        Write-Fail "$Name pattern cannot match its own known-good sample -- the sweep is dead"
+        Write-Fail "  pattern: $Pattern"
+        Write-Fail "  sample : $Sample"
+        return $false
     }
-    if (-not $orphans) { Write-Ok 'no stray next dev processes' }
+    return $true
+}
+
+function Stop-StrayFleetMindProcesses {
+    <#
+        Processes belonging to this project that are NOT holding a port, so
+        freeing the port never finds them.
+
+        Two kinds exist in practice. A `next dev` child can outlive its parent
+        and keep writing to .next, and two dev servers then fight over that
+        directory: one writes the chunks, the other serves and 404s every one,
+        so the page renders as blank unstyled HTML. And a `uvicorn
+        fleetmind.api.main` process can linger after the port listener is gone,
+        ready to grab the port back and serve stale code -- uvicorn runs without
+        --reload here, so stale code is invisible until something behaves oddly.
+
+        Matching is on the command line, so the unrelated Streamlit app and the
+        other `uvicorn main:app` services on this machine are never touched.
+    #>
+    $sweeps = @(
+        @{ Name = 'next dev';  Pattern = $script:FrontendMatch
+           Sample = 'C:\Users\x\Documents\Projects\fleetmind\frontend\node_modules\next\dist\server\lib\start-server.js' }
+        @{ Name = 'uvicorn';   Pattern = $script:BackendMatch
+           Sample = '"C:\python.exe" -m uvicorn fleetmind.api.main:app --host 127.0.0.1 --port 8000' }
+    )
+
+    $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object { $_.CommandLine })
+
+    foreach ($sweep in $sweeps) {
+        if (-not (Assert-PatternCanMatch -Pattern $sweep.Pattern -Sample $sweep.Sample -Name $sweep.Name)) {
+            continue
+        }
+        $strays = @($all | Where-Object { $_.CommandLine -match $sweep.Pattern })
+        foreach ($o in $strays) {
+            # The process list is a snapshot, and `taskkill /T` kills a whole
+            # tree: stopping a `next dev` parent also stops its start-server.js
+            # child, which is still in the snapshot. Re-check before each kill,
+            # or taskkill fails on the already-dead child -- and in Windows
+            # PowerShell 5.1 a native command's stderr under
+            # $ErrorActionPreference = 'Stop' is a TERMINATING error, which
+            # aborted the whole script with the demo down. Found by running it.
+            if (-not (Get-Process -Id $o.ProcessId -ErrorAction SilentlyContinue)) {
+                Write-Ok "stray $($sweep.Name) PID $($o.ProcessId) already gone (killed with its parent tree)"
+                continue
+            }
+            Write-Warn2 "stopping stray $($sweep.Name) (PID $($o.ProcessId))"
+            try {
+                & taskkill.exe /PID $o.ProcessId /T /F 2>&1 | Out-Null
+            } catch {
+                # Lost a race with its own parent's tree kill -- harmless.
+                Write-Ok "stray $($sweep.Name) PID $($o.ProcessId) exited before it could be stopped"
+            }
+        }
+        if (-not $strays) {
+            Write-Ok "no stray $($sweep.Name) processes (swept $($all.Count) processes)"
+        }
+    }
 }
 
 # ── free the ports ────────────────────────────────────────────────────
 Write-Step 'Freeing ports 8000 and 3000'
-Stop-PortListener -Port 8000
+Stop-PortListener -Port 8000 -Match $BackendMatch
 if (-not $SkipFrontend) {
-    Stop-PortListener -Port 3000
-    Stop-OrphanedNextDev
+    Stop-PortListener -Port 3000 -Match $FrontendMatch
 }
+# After the ports are free, sweep anything of ours that was NOT holding a port
+# -- an orphaned `next dev` child or a lingering uvicorn. Freeing a port can
+# never find those, and both cause failures that look like something else.
+Stop-StrayFleetMindProcesses
 
 # ── backend ───────────────────────────────────────────────────────────
 Write-Step 'Starting backend (uvicorn, no --reload)'
