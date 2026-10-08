@@ -228,8 +228,10 @@ def test_reset_clears_ai_requests_and_unflags_equipment(replay_session, model_di
 
     # Make the decision unambiguously HIGH so the sync bridge flags equipment
     # and files an AI request, whatever the untrained model happened to predict.
+    # Both fields are forced so this holds under either decision rule.
     for decision in replay_session.query(AgentDecision).all():
         decision.decision_text = "[HIGH] forced for test"
+        decision.risk_score = 0.999999
     replay_session.commit()
     process_arrived_windows(replay_session, model_dir=model_dir)
     assert replay_session.get(Equipment, 1).status == "maintenance"
@@ -294,7 +296,10 @@ def test_reset_deletes_work_orders_dispatched_against_ai_requests(replay_session
     replay_session.commit()
     process_arrived_windows(replay_session, model_dir=model_dir)
     for decision in replay_session.query(AgentDecision).all():
+        # Force a flag under either decision rule: the heuristic reads the
+        # [URGENCY] tag, the expected-cost/SPRT path reads P(faulted).
         decision.decision_text = "[CRITICAL] forced for test"
+        decision.risk_score = 0.999999
     replay_session.commit()
     process_arrived_windows(replay_session, model_dir=model_dir)
 
@@ -348,3 +353,67 @@ def test_reset_timestamp_is_timezone_aware(replay_session):
         )
         < 60
     )
+
+
+# --- decision policy selection (OPEN_QUESTIONS.md Q6) ---------------------
+
+
+def _set_policy(monkeypatch, value):
+    from fleetmind.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "decision_policy", value)
+
+
+def test_pipeline_expected_cost_decides_from_the_stored_distribution(
+    replay_session, model_dir, monkeypatch
+):
+    from fleetmind.decision import policy
+
+    _set_policy(monkeypatch, "expected_cost")
+    release_next_batch(replay_session, batch_size=4)
+    replay_session.commit()
+    process_arrived_windows(replay_session, model_dir=model_dir)
+
+    preds = {p.id: p for p in replay_session.query(ModelPrediction).all()}
+    decisions = replay_session.query(AgentDecision).all()
+    assert len(decisions) == 4
+    for d in decisions:
+        probs = preds[d.prediction_id].class_probabilities
+        assert probs is not None and len(probs) == len(LABEL_MAP)
+        assert sum(probs) == pytest.approx(1.0, abs=1e-5)
+        assert d.agent_name == policy.AGENT_NAME
+        assert d.risk_score == pytest.approx(policy.p_faulted(probs))
+        assert d.decision_text.startswith("[")
+
+
+def test_pipeline_heuristic_switch_restores_the_agent_chain(replay_session, model_dir, monkeypatch):
+    from fleetmind.decision import policy
+
+    _set_policy(monkeypatch, "heuristic")
+    release_next_batch(replay_session, batch_size=3)
+    replay_session.commit()
+    process_arrived_windows(replay_session, model_dir=model_dir)
+
+    names = {d.agent_name for d in replay_session.query(AgentDecision).all()}
+    assert replay_session.query(AgentDecision).count() == 3
+    assert policy.AGENT_NAME not in names
+
+
+def test_policy_skips_predictions_without_a_distribution(replay_session, model_dir, monkeypatch):
+    """Pre-0007 rows cannot be decided by the policy; they are left undecided,
+    never decided by some other rule under the policy's name."""
+    _set_policy(monkeypatch, "heuristic")
+    release_next_batch(replay_session, batch_size=2)
+    replay_session.commit()
+    process_arrived_windows(replay_session, model_dir=model_dir)
+    replay_session.query(AgentDecision).delete()
+    for p in replay_session.query(ModelPrediction).all():
+        p.class_probabilities = None
+    replay_session.commit()
+
+    _set_policy(monkeypatch, "expected_cost")
+    result = process_arrived_windows(replay_session, model_dir=model_dir)
+
+    assert replay_session.query(ModelPrediction).count() == 2
+    assert result["decisions_written"] == 0
+    assert replay_session.query(AgentDecision).count() == 0

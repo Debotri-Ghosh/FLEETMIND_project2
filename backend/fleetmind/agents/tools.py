@@ -5,6 +5,8 @@ read-only wrapper around code that already exists and already ran:
 
     get_signal_statistics      -> agents.agents._signal_stats
     get_risk_assessment        -> agents.agents.risk_agent + maintenance_agent
+                                  (the heuristic BASELINE; see get_decision_policy)
+    get_decision_policy        -> decision.policy.assess (the authoritative path)
     get_bearing_frequency_match-> ml.bearing_freq.matched_frequency_for_fault
     measure_spectral_band_energy -> ml.bearing_freq.spectrum (numpy FFT)
 
@@ -34,6 +36,7 @@ from fleetmind.agents.agents import (
     maintenance_agent,
     risk_agent,
 )
+from fleetmind.decision import policy as decision_policy
 from fleetmind.ml.bearing_freq import (
     characteristic_frequencies,
     matched_frequency_for_fault,
@@ -66,6 +69,10 @@ class EvidenceContext:
     raw_values: list[float]
     stored_risk_score: float | None
     stored_decision_text: str | None
+    # Which path wrote the stored decision, and the model's full distribution.
+    # Defaulted so contexts built before Phase 5 still construct.
+    stored_agent_name: str | None = None
+    class_probabilities: list[float] | None = None
 
 
 # ── tool implementations ───────────────────────────────────────────────
@@ -115,6 +122,33 @@ def get_risk_assessment(ctx: EvidenceContext) -> dict[str, Any]:
         "urgency": state["maintenance_urgency"],
         "rule_based_action": state["maintenance_action"],
         "stored_risk_score": ctx.stored_risk_score,
+    }
+
+
+def get_decision_policy(ctx: EvidenceContext) -> dict[str, Any]:
+    """The expected-cost policy's assessment of this window.
+
+    Read from `decision.policy.assess` over the stored class distribution -- the
+    same function and input the pipeline decided with. `decided_by` says which
+    path actually filed this request, so the narrative can say which decision is
+    authoritative instead of guessing.
+    """
+    decided_by_policy = ctx.stored_agent_name == decision_policy.AGENT_NAME
+    if not ctx.class_probabilities:
+        return {
+            "available": False,
+            "decided_by": ctx.stored_agent_name,
+            "reason": (
+                "No class distribution is stored for this prediction (written before "
+                "migration 0007), so the expected-cost policy cannot assess it. The "
+                "heuristic assessment from get_risk_assessment is the decision on file."
+            ),
+        }
+    return {
+        "available": True,
+        "decided_by": ctx.stored_agent_name,
+        "policy_is_authoritative_here": decided_by_policy,
+        **decision_policy.assess(ctx.class_probabilities),
     }
 
 
@@ -214,7 +248,22 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "model's predicted fault class and confidence, the fault severity "
             "weight, the site's motor load and load factor, the computed 0-1 "
             "risk score, the listed risk factors, and the urgency band with "
-            "its canned action. These are the authoritative numbers."
+            "its canned action. This is the HEURISTIC BASELINE, built from "
+            "hand-set constants. It is authoritative only when "
+            "get_decision_policy reports policy_is_authoritative_here = false."
+        ),
+        "strict": True,
+        "input_schema": _NO_ARGS,
+    },
+    {
+        "name": "get_decision_policy",
+        "description": (
+            "The expected-cost decision policy's assessment of this window: the "
+            "model's full probability over the four classes, P(faulted), the "
+            "expected cost of every action in relative units, the chosen action "
+            "and urgency, the P(faulted) at which the policy flags a machine, "
+            "and which decision path filed this request. When "
+            "policy_is_authoritative_here is true this is the decision on file."
         ),
         "strict": True,
         "input_schema": _NO_ARGS,
@@ -274,6 +323,7 @@ def openai_tool_definitions() -> list[dict[str, Any]]:
 _DISPATCH: dict[str, Callable[..., dict[str, Any]]] = {
     "get_signal_statistics": get_signal_statistics,
     "get_risk_assessment": get_risk_assessment,
+    "get_decision_policy": get_decision_policy,
     "get_bearing_frequency_match": get_bearing_frequency_match,
     "measure_spectral_band_energy": measure_spectral_band_energy,
 }

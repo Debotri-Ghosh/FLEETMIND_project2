@@ -371,10 +371,12 @@ A subtlety that matters when quoting figures:
   **model's predicted label and confidence** — the honest sensor→model→decision
   flow the project claims. This path flags **6**.
 
-The live database holds the **model-prediction** result. Only that path
-demonstrates the model actually driving maintenance decisions, so it is the one
-to quote — and to say so. `agents/run.py` is left unchanged so the older
-documented batch figures stay reproducible.
+The figures above are both **heuristic** decisions. Since Phase 5 the replay
+path decides with the **expected-cost policy** by default (§8A), which flags
+**8** of the 8 demo machines; `DECISION_POLICY=heuristic` restores the
+6-machine result exactly. `agents/run.py` is left unchanged so the older
+documented batch figures stay reproducible. Say which path produced a number
+whenever you quote one.
 
 ---
 
@@ -610,6 +612,91 @@ a router added later without a guard fails the suite instead of shipping open.
 
 The frontend guard is documented in its own docstring as a **usability guard,
 not a security one**: deleting it would make the app ugly, not insecure.
+
+---
+
+## 8A. The decision layer — replacing invented constants
+
+### What was wrong with the original decision path
+
+The rule-based risk agent multiplied a per-fault severity table (Ball 0.4,
+InnerRace 0.7, OuterRace 0.85), a per-HP load factor and a confidence blend, then
+cut the result at fixed 0.15 / 0.40 / 0.70 urgency bands. None of those numbers is
+fitted, cited or derived. Worse, running the real functions shows the risk score
+**reads an RMS-derived "confidence", not the classifier's** — with
+`OuterRace` at 3 HP, model confidences of 0.26, 0.55 and 0.9991 all give risk 1.0.
+The model's uncertainty never reached the decision.
+
+### What replaced it (Phases 0–5)
+
+| Phase | Technique | Outcome |
+|---|---|---|
+| 0 | Measure the baseline first | Found the deployed checkpoints are last-epoch, not best-epoch (§3.1); first decision-quality figures |
+| 1 | Three-way split, real best-epoch selection | Better calibrated (ECE 0.2146 → 0.0966), 5 points less accurate; deployed models kept |
+| 2 | Temperature scaling; split-conformal sets | **Rejected on evidence**: temperature scaling worsened test ECE; conformal sets missed 90% coverage at 2 of 4 sites and were near-vacuous elsewhere |
+| 3 | Expected-cost policy over an explicit cost matrix | Shipped |
+| 4 | Repeated SPRT over consecutive windows | Shipped |
+| 5 | Wired into the pipeline, API, LLM tools and UI | Shipped; heuristic one setting away |
+
+**The policy.** P(faulted) = 1 − P(Normal) from the stored softmax (migration
+`0007` adds `model_predictions.class_probabilities`). Costs in relative units,
+run-to-failure = 100, repair 20, inspection visit 2, stop 15. Boundaries are
+derived: monitor below 0.025, inspect to 0.9, schedule maintenance above; "stop"
+is never optimal because pricing it needs a degradation rate CWRU does not have.
+Only ratios matter, so no currency figure is invented; a sweep of repair cost
+from 5 to 95 left both error rates at zero.
+
+**The sequential test.** Each window contributes a log-likelihood ratio with the
+training prior divided out (prior P(faulted) = 3/4, derived from the
+inverse-frequency class weighting); the machine is flagged when the running sum
+crosses A = log((1−β)/α) = 4.5539, α = 0.01, β = 0.05, and resets on crossing the
+lower boundary. Windows are autocorrelated, so Wald's guarantees do not hold
+exactly — rates are measured, not asserted.
+
+### Measured results — held-out, deployed checkpoints
+
+| Rule | Faulted recordings missed | Cross-site false alarms | Mean detection delay |
+|---|---|---|---|
+| Heuristic, any window | 0 / 16 | 0 / 12 | 0.25 windows |
+| Expected-cost policy, any window | 0 / 16 | 0 / 12 | 0.00 windows |
+| Expected-cost policy + repeated SPRT | 0 / 16 | 0 / 12 | 0.62 windows |
+
+False alarms are measured **cross-site** — each site's model on the other three
+sites' Normal recordings, which it never trained on: 12 model/recording pairs,
+2,484 windows, from only 4 distinct healthy recordings. On CWRU, fault presence
+is easy (P(faulted) ≤ 0.107 on every healthy window, ≥ 0.843 on every faulted
+one); fault *type* is the hard problem. So the error rates **tie**. The gains are
+structural: the classifier's probability now drives the decision, every boundary
+is derived from stated costs, and in a stress test that injects real faulted-window
+evidence into healthy recordings, the SPRT needs two consecutive typical windows
+to flag at 3 of 4 sites where the any-window rule needs one. It does not help
+against the model's most confident windows, because the model is over-confident
+enough that one window's evidence exceeds the whole boundary.
+
+### Before/after on the live demo (2026-10-08)
+
+The full archive was run through `process_arrived_windows` once per rule against
+the live database, then the replay was rewound to zero.
+
+| | Heuristic | Expected-cost + SPRT |
+|---|---|---|
+| Machines flagged (of 8, all documented Ball faults) | 6 | **8** |
+| Held-out demo machines flagged (A1, B1, C1, D1) | 4 / 4 | 4 / 4 |
+| Training-split demo machines flagged (A2, B2, C2, D2) | 2 / 4 | 4 / 4 |
+| Window decisions HIGH / CRITICAL / MEDIUM / LOW | 1,393 / 1,682 / 464 / 828 | 3,537 / 0 / 2 / 828 |
+| Full-archive pipeline time (incl. prediction) | 133.0 s | 18.2 s |
+
+**The 8-vs-6 difference is in-sample and must not be quoted as an
+improvement.** Both machines only the policy flags (Bearing Motor A2, Pump Motor
+B2) run on recordings their site model trained on. On held-out machines the two
+rules agree. The baseline's evidence panel line for A2's flagging window reads
+urgency MEDIUM — consistent with its Ball severity weight of 0.4 pulling Ball
+faults below the HIGH band, though that cause is inferred, not separately tested.
+
+The evidence API now reports `recording_in_training_split` for every AI-filed
+request, and the UI states it. Before this, the ground-truth panel told every
+viewer the recording had been held out, which was false for half the demo
+machines.
 
 ---
 

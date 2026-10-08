@@ -6,14 +6,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
-from fleetmind.agents.agents import diagnostic_agent
+from fleetmind.agents.agents import diagnostic_agent, maintenance_agent, risk_agent
 from fleetmind.agents.llm import LLMNotConfigured, generate_narrative
+from fleetmind.agents.sync_equipment_status import policy_decision_rows, sprt_trigger
 from fleetmind.agents.tools import EvidenceContext
 from fleetmind.api.schemas import (
     EvidencePackage,
     MatchedFrequency,
+    PolicyAssessment,
     ServiceRequestCreate,
     ServiceRequestNarrative,
+    SprtSummary,
 )
 from fleetmind.api.schemas import ServiceRequest as ServiceRequestSchema
 from fleetmind.auth.deps import (
@@ -38,6 +41,9 @@ from fleetmind.db.models import (
     User,
 )
 from fleetmind.db.models import ServiceRequest as ServiceRequestModel
+from fleetmind.decision import policy as decision_policy
+from fleetmind.decision import sequential
+from fleetmind.decision.holdout import split_for_depot
 from fleetmind.ml.bearing_freq import (
     characteristic_frequencies,
     matched_frequency_for_fault,
@@ -220,6 +226,12 @@ def _evidence_context(db: Session, request_id: int) -> EvidenceContext:
         raw_values=[float(v) for v in (window.raw_values or [])],
         stored_risk_score=decision.risk_score,
         stored_decision_text=decision.decision_text,
+        stored_agent_name=decision.agent_name,
+        class_probabilities=(
+            [float(v) for v in prediction.class_probabilities]
+            if prediction.class_probabilities
+            else None
+        ),
     )
 
 
@@ -254,6 +266,34 @@ def get_evidence(
             "signal_values": values,
         }
     )
+    baseline = maintenance_agent(
+        risk_agent({**diagnostic, "depot_id": depot.id, "load_hp": depot.load_hp})
+    )
+    policy_assessment = (
+        PolicyAssessment(
+            **decision_policy.assess([float(v) for v in prediction.class_probabilities])
+        )
+        if prediction.class_probabilities
+        else None
+    )
+    sprt_summary = None
+    if decision.agent_name == decision_policy.AGENT_NAME:
+        rows = policy_decision_rows(db, experiment.id)
+        _, result = sprt_trigger(rows)
+        if result is not None:
+            upper, lower = sequential.boundaries()
+            sprt_summary = SprtSummary(
+                flagged=result.flagged,
+                windows_examined=result.n_examined,
+                windows_available=len(rows),
+                healthy_resets=result.n_healthy_decisions,
+                upper_boundary=round(upper, 4),
+                lower_boundary=round(lower, 4),
+                alpha=sequential.DEFAULT_ALPHA,
+                beta=sequential.DEFAULT_BETA,
+                max_evidence=round(result.max_sum, 4),
+            )
+
     freqs, mags = spectrum(values, experiment.sampling_rate_hz)
     matched = matched_frequency_for_fault(
         prediction.predicted_label,
@@ -283,6 +323,11 @@ def get_evidence(
         diagnosis_confidence=diagnostic["diagnosis_confidence"],
         risk_score=decision.risk_score,
         decision_text=decision.decision_text,
+        decided_by=decision.agent_name,
+        policy_assessment=policy_assessment,
+        sprt=sprt_summary,
+        baseline_risk_score=baseline["risk_score"],
+        baseline_urgency=str(baseline["maintenance_urgency"]).upper(),
         documented_fault_type=experiment.fault_type,
         documented_fault_diameter_in=experiment.fault_diameter_in,
         documented_window_label=window.label,
@@ -290,6 +335,9 @@ def get_evidence(
         site_load_hp=depot.load_hp,
         nominal_rpm=depot.nominal_rpm,
         source_file=experiment.source_file,
+        recording_in_training_split=(
+            experiment.id in split_for_depot(db, depot.id).train_experiment_ids
+        ),
         # Compared on the base class only: the diagnostic agent may append a
         # qualifier such as "(unconfirmed - low signal energy)", which is a
         # confidence note rather than a different class.

@@ -88,6 +88,13 @@ documented batch figures stay reproducible. As with the 2026-10-01 load-factor f
 this **changes which machines get flagged**; the before/after is measured and
 recorded, not assumed.
 
+**Implemented 2026-10-08 (Phase 5).** `Settings.decision_policy` defaults to
+`expected_cost`; the sync bridge flags by repeated SPRT over the policy's own
+decisions, and `--policy heuristic` / `DECISION_POLICY=heuristic` restore the old
+rule. Measured on the live archive: the heuristic flags 6 of 8 demo machines, the
+policy all 8 -- the two extra on training recordings, so in-sample (see
+`FleetMind_Implementation_Report.md` section 8A).
+
 ### Q7. What is done with the Phase 2 techniques that did not help?
 
 **Default: not shipped. Recorded as tested-and-rejected, not quietly dropped.**
@@ -96,6 +103,10 @@ PLAN.md Phase 5 lists exposing "the calibrated posterior and the conformal set".
 measured both and found neither helped on this data. Wiring them in would put two
 techniques the project's own evidence argues against into the product. The plan item
 is closed as *rejected on evidence*, with the evidence linked.
+
+**Closed 2026-10-08.** Nothing from Phase 2 is wired in. The UI states that the
+probabilities are uncalibrated (held-out ECE 0.2146) and that temperature scaling
+was tested and made it worse.
 
 ### Q8. Where are the full class probabilities stored?
 
@@ -106,3 +117,7 @@ The policy needs `P(Normal)`; today only the argmax label and its confidence are
 stored. Nullable, so all 4,367 existing rows stay valid and the heuristic path is
 unaffected. It also lets the evidence panel show the full distribution rather than
 one number.
+
+**Implemented 2026-10-08.** Migration `0007` applied to the live database
+(`alembic upgrade head`: 0006 -> 0007); the evidence panel shows all four class
+probabilities.

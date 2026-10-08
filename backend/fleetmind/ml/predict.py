@@ -96,6 +96,7 @@ def predict_depot(depot_id: int, session, model_path: Path, incremental: bool = 
             model_version=f"cnn_depot_{depot_id}",
             predicted_label=pred_label,
             confidence=confidence,
+            class_probabilities=[float(v) for v in probs],
         )
         session.add(pred)
         count += 1

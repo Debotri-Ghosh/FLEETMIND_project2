@@ -110,6 +110,40 @@ class MatchedFrequency(BaseModel):
     harmonic: int
 
 
+class PolicyAssessment(BaseModel):
+    """The expected-cost policy's assessment of one window (decision.policy.assess)."""
+
+    class_probabilities: dict[str, float] = Field(
+        description="The classifier's full softmax distribution, by class."
+    )
+    p_faulted: float = Field(description="1 - P(Normal).")
+    action: str
+    urgency: str
+    action_text: str
+    expected_costs: dict[str, float] = Field(
+        description="Expected cost of every action, in relative units (failure = 100)."
+    )
+    flag_threshold_p_faulted: float | None = Field(
+        default=None, description="P(faulted) above which one window alone favours repair."
+    )
+    never_optimal_actions: list[str]
+    cost_matrix_relative_units: dict[str, dict[str, float]]
+
+
+class SprtSummary(BaseModel):
+    """The repeated SPRT over this machine's policy decisions, in window order."""
+
+    flagged: bool
+    windows_examined: int = Field(description="Windows consumed; the test stops at a flag.")
+    windows_available: int
+    healthy_resets: int
+    upper_boundary: float
+    lower_boundary: float
+    alpha: float
+    beta: float
+    max_evidence: float
+
+
 class EvidencePackage(BaseModel):
     """Inspectable evidence behind one AI-filed service request.
 
@@ -148,6 +182,19 @@ class EvidencePackage(BaseModel):
     risk_score: float | None = None
     decision_text: str | None = None
 
+    # ── which path decided, and the two side by side ──
+    decided_by: str | None = Field(
+        default=None, description="agent_name of the stored decision that filed this request."
+    )
+    policy_assessment: PolicyAssessment | None = Field(
+        default=None, description="None when no class distribution is stored (pre-0007 rows)."
+    )
+    sprt: SprtSummary | None = None
+    baseline_risk_score: float = Field(
+        description="The heuristic baseline's risk score for this window, recomputed."
+    )
+    baseline_urgency: str
+
     # ── ground truth, kept deliberately separate from the prediction ──
     #
     # These come from the CWRU dataset's own documentation of the recording --
@@ -169,6 +216,11 @@ class EvidencePackage(BaseModel):
     site_load_hp: int = Field(description="Motor load in HP for this recording.")
     nominal_rpm: int | None = None
     source_file: str = Field(description="The CWRU .mat file this came from.")
+    recording_in_training_split: bool = Field(
+        description="True when this recording was in the site model's training split "
+        "(decision/holdout.py, the same split ml/train.py used), so agreement here is "
+        "in-sample rather than evidence of generalisation."
+    )
     prediction_matches_documented: bool = Field(
         description="True when the model's class equals the documented one."
     )

@@ -92,7 +92,12 @@ function AiFlaggedPanel() {
         <tr className="border-b text-left text-ink-3">
           <th className="py-2">Equipment</th>
           <th className="py-2">Predicted Fault</th>
-          <th className="py-2">Risk Score</th>
+          <th
+            className="py-2"
+            title="P(faulted) when the expected-cost policy decided; the heuristic risk score for baseline decisions"
+          >
+            P(faulted) / risk
+          </th>
           <th className="py-2">Priority</th>
           <th className="py-2">Status</th>
           <th className="py-2">Agent Decision</th>

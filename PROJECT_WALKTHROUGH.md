@@ -24,7 +24,8 @@ cover slices of it — this is the connective tissue.
 > FleetMind is a predictive-maintenance platform for rotating industrial
 > machinery. It takes real vibration recordings from bearings, classifies the
 > fault with a 1D CNN, converts that prediction into a maintenance decision
-> through a rule-based agent chain, and acts on it — flipping a machine's status
+> with an expected-cost policy and a sequential test over consecutive windows
+> (the original rule-based agent chain is kept as a measured baseline), and acts on it — flipping a machine's status
 > and filing a service request a technician gets dispatched against. Every
 > decision carries inspectable evidence: the raw signal, its spectrum, the
 > bearing physics that should corroborate it, and the dataset's own ground truth
@@ -252,9 +253,21 @@ without any LLM.
 | **Risk** | `severity × load_factor`, scaled by confidence |
 | **Maintenance** | Maps risk to urgency band + recommended action |
 
-`sync_equipment_status.py` is the **ML → product bridge**: it takes the worst
-decision per machine, flips `equipment.status`, and files a service request —
-guarded so re-runs are idempotent.
+`sync_equipment_status.py` is the **ML → product bridge**: it flips
+`equipment.status` and files a service request — guarded so re-runs are
+idempotent. Under the heuristic rule it takes the worst decision per machine;
+under the default expected-cost rule it runs a repeated SPRT over the policy's
+decisions in window order and files against the window where it crossed.
+
+## 4.3a The decision layer — `fleetmind/decision/`
+
+The authoritative path since Phase 5. `policy.py` prices every action from the
+stored softmax (`P(faulted) = 1 − P(Normal)`) using the explicit cost matrix in
+`costs.py` and picks the cheapest; `sequential.py` is the repeated SPRT that
+decides when a machine is flagged. `holdout.py`, `calibration.py`, `quality.py`,
+`crosssite.py` and the `phase*.py` reports are the measurement side. Results and
+caveats: `FleetMind_Implementation_Report.md` §8A. The four rule agents above
+remain as the baseline (`DECISION_POLICY=heuristic`).
 
 ## 4.4 The replay engine — `fleetmind/replay/`
 

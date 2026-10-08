@@ -41,12 +41,16 @@ Enforced at the API, not by hiding buttons — see [Authentication](#authenticat
    windows of 2,048 samples at 12 kHz.
 2. **Classifies** each window as Normal / Ball / InnerRace / OuterRace with a
    per-site 1D CNN over the window's FFT magnitude.
-3. **Reasons** over each prediction with a deterministic LangGraph chain —
-   Monitor → Diagnostic → Risk → Maintenance — producing a 0–1 risk score and an
-   urgency band.
-4. **Acts**: a HIGH or CRITICAL decision flips a real equipment row to
-   `maintenance` and auto-files a service request, which an operator dispatches
-   a technician against.
+3. **Decides** with an expected-cost policy: the classifier's full probability
+   distribution gives P(faulted) = 1 − P(Normal), every action (monitor /
+   inspect / schedule maintenance / stop) is priced under it from an explicit
+   cost matrix, and the cheapest wins. The original rule-based LangGraph chain
+   (Monitor → Diagnostic → Risk → Maintenance) is retained as a measured
+   baseline, one setting away.
+4. **Acts**: a machine is flagged only when a sequential probability ratio test
+   over its consecutive windows crosses its boundary. That flips a real
+   equipment row to `maintenance` and auto-files a service request, which an
+   operator dispatches a technician against.
 5. **Explains**: every AI-filed request carries the triggering signal, its
    spectrum, the corroborating bearing defect frequency, the documented ground
    truth beside the independent prediction, and an LLM-written narrative in
@@ -118,6 +122,46 @@ sites** — federated averaging across clients with different class distribution
 collapsed the global model into a **majority-class predictor**. Plain FedAvg was
 worse still: it oscillated round to round, which is why FedProx is the primary
 result.
+
+### Maintenance decisions: an expected-cost policy and a sequential test
+
+The original decision path multiplied hand-set constants (a per-fault severity
+table, a per-HP load factor, fixed urgency thresholds) and — measured, not
+assumed — **never read the classifier's confidence at all**: a 0.26 and a 0.9991
+prediction produced identical risk scores. It is replaced, and kept as a baseline:
+
+- **Expected-cost policy** (`decision/policy.py`, `decision/costs.py`). Costs are
+  relative units with an unplanned run-to-failure = 100 (repair 20, inspection
+  visit 2, stop 15); only their ratios matter, so no currency or ROI figure is
+  invented. The decision boundaries *follow from* those costs: monitor below
+  P(faulted) 0.025, inspect up to 0.9, schedule maintenance above. "Stop now" is
+  never optimal — pricing it needs a degradation rate CWRU cannot supply, and the
+  UI says so. Only healthy vs. faulted is priced, so no per-fault severity
+  constant is needed.
+- **Repeated SPRT** (`decision/sequential.py`) over a machine's windows, α = 0.01,
+  β = 0.05, boundary A = 4.5539. Windows are autocorrelated, so these are design
+  targets; achieved rates are measured.
+
+**Measured on held-out data (deployed checkpoints):** both the heuristic and the
+policy miss **0 of 16** faulted held-out recordings and raise **0 of 12**
+cross-site false alarms (each site's model scored on the other three sites'
+never-seen Normal recordings; 0 of 2,484 healthy windows flagged). Fault
+*presence* separates perfectly on this data — P(faulted) never exceeds 0.107 on a
+healthy window or falls below 0.843 on a faulted one — so the policy **ties** the
+baseline on error rates. What it adds is that the model's probability reaches the
+decision, every threshold is derived, and under a stress test the SPRT stops one
+isolated, typical misclassified window from flagging a healthy machine at 3 of 4
+sites. Calibration (temperature scaling) and conformal prediction sets were
+tested and **rejected on evidence** — both made things worse or were vacuous.
+
+**On the live demo:** all eight demo machines run on recordings with a documented
+Ball fault. The baseline flags 6, the policy flags all 8 — but the two extra
+(Bearing Motor A2, Pump Motor B2) are on recordings their site model *trained
+on*, so that difference is **in-sample and is not evidence of better
+generalisation**. On the four held-out demo machines both flag 4 of 4. Each
+AI-flagged request's evidence panel shows which applies.
+
+`DECISION_POLICY=heuristic` in `backend/.env` restores the old path exactly.
 
 ### ⚠ The 91.44% figure is **not** accuracy
 
@@ -236,7 +280,7 @@ an optional extra.
 ```ini
 DATABASE_URL=postgresql://fleetmind:<password>@localhost:5432/fleetmind
 
-# Optional. Without it the whole rule-based pipeline still runs; only the
+# Optional. Without it the whole decision pipeline still runs; only the
 # narrative endpoint returns a clear 503.
 GROQ_API_KEY=gsk_...
 GROQ_MODEL=openai/gpt-oss-120b
@@ -244,6 +288,10 @@ GROQ_MODEL=openai/gpt-oss-120b
 # Optional but recommended. With no secret the API generates a random one per
 # process and logs a warning -- tokens then stop surviving a restart.
 JWT_SECRET=<python -c "import secrets; print(secrets.token_urlsafe(48))">
+
+# Optional. expected_cost (default) = the decision layer; heuristic = the
+# original rule-based chain, kept as a baseline.
+DECISION_POLICY=expected_cost
 ```
 
 `frontend/.env` (local only, not committed):
@@ -339,10 +387,17 @@ python -m fleetmind.augmentation.run --depot-id 1
 # Federated learning across all 4 sites
 python -m fleetmind.federated.run --strategy fedprox --mu 0.1 --rounds 30
 
-# Predictions -> agent decisions -> equipment status + auto-filed requests
+# Batch path for the HEURISTIC baseline: predictions -> rule-based decisions ->
+# equipment status + auto-filed requests. (The live/replay path runs the
+# expected-cost policy instead, via fleetmind/pipeline.py.)
 python -m fleetmind.ml.predict --all-depots
 python -m fleetmind.agents.run --all-pending
-python -m fleetmind.agents.sync_equipment_status        # --dry-run to preview
+python -m fleetmind.agents.sync_equipment_status --policy heuristic   # --dry-run to preview
+
+# Decision-layer evaluation reports (read-only; write mlruns/decision/phase*/)
+python -m fleetmind.decision.report     # Phase 0 baseline
+python -m fleetmind.decision.phase3     # expected-cost policy, cross-site false alarms
+python -m fleetmind.decision.phase4     # repeated SPRT + stress test
 ```
 
 ### The replay (live automation)

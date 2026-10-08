@@ -30,6 +30,7 @@ import {
   faultColor,
 } from "@/lib/theme";
 import { useAuth } from "./auth-provider";
+import { DecisionPanel } from "./decision-panel";
 import { GroundTruthVsPrediction } from "./ground-truth";
 import { SectionLabel } from "./ui";
 
@@ -370,6 +371,13 @@ export function EvidencePanel({ requestId }: { requestId: number }) {
         </div>
       </div>
 
+      <div>
+        <SectionLabel>Maintenance decision</SectionLabel>
+        <div className="mt-2">
+          <DecisionPanel evidence={e} />
+        </div>
+      </div>
+
       <div className="flex flex-wrap gap-x-8 gap-y-2 text-sm">
         <span>
           <span className="text-ink-3">Signal window</span>{" "}
@@ -482,8 +490,8 @@ export function EvidencePanel({ requestId }: { requestId: number }) {
       <div>
         <h4 className="mb-1 text-sm font-semibold">Diagnostic agent statistics</h4>
         <p className="mb-2 text-xs text-ink-3">
-          Recomputed from the window above with the same function that produced the decision
-          (only the decision text and risk score are stored).
+          Recomputed from the window above with the heuristic baseline's own functions. These
+          feed the baseline's risk score, not the expected-cost decision above.
         </p>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatTile label="Signal RMS" value={e.signal_rms.toFixed(4)} />
@@ -493,9 +501,9 @@ export function EvidencePanel({ requestId }: { requestId: number }) {
             value={`${(e.diagnosis_confidence * 100).toFixed(0)}%`}
           />
           <StatTile
-            label="Risk score"
-            value={e.risk_score !== null ? `${(e.risk_score * 100).toFixed(0)}%` : "—"}
-            accent={e.risk_score !== null && e.risk_score >= 0.7 ? "text-crit" : undefined}
+            label="Baseline risk score"
+            value={`${(e.baseline_risk_score * 100).toFixed(0)}%`}
+            accent={e.baseline_risk_score >= 0.7 ? "text-crit" : undefined}
           />
         </div>
         <p className="mt-2 text-xs text-ink-2">

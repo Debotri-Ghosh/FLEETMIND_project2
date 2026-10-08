@@ -159,11 +159,35 @@ Two deliberately unlike panels:
 - **right, coloured and solid** — what the classifier said, with its
   confidence and checkpoint.
 
-> The model is blind to the left panel. It was trained on an experiment-level
-> split, so no window from this recording was in its training set. The verdict
+> The model is blind to the left panel. **Read the note under the right panel
+> before saying anything about generalisation**: machines A1, B1, C1 and D1 run on
+> recordings held out of their site model's training split; A2, B2, C2 and D2 run
+> on recordings it *trained on*, and the panel says so. Agreement on those is
+> in-sample. (Corrected 2026-10-08: this script used to claim every recording was
+> held out.) The verdict
 > strip underneath says Agreement or Disagreement, and it is just as prominent
 > when the model is wrong — a panel that only shows matches is evidence of
 > nothing.
+
+### 4a′. The maintenance decision
+
+Under the ground truth, **Maintenance decision** shows what was decided and why:
+
+- the chosen action and P(faulted) = 1 − P(Normal), read from the classifier's
+  full probability over all four classes (shown);
+- the expected cost of every action in relative units (run-to-failure = 100) —
+  point out that the cheapest wins, and that "stop machine" is marked *never
+  optimal* because pricing it needs a degradation rate CWRU does not have;
+- **Why the machine was flagged**: the sequential test, e.g. "flagged after 2 of
+  59 windows, evidence 6.46 against boundary 4.55";
+- one line with the heuristic baseline's verdict on the same window, labelled as
+  comparison only. On Bearing Motor A2 the baseline says MEDIUM — that is why the
+  old rule never flagged it.
+
+> Say: "Every threshold here is derived from stated costs, not tuned. On
+> held-out data this ties the old rule — zero missed faults, zero cross-site false
+> alarms — because fault *presence* is easy on CWRU. What it changes is that the
+> model's probability now actually reaches the decision."
 
 ### 4b. The signal and its spectrum
 
@@ -257,6 +281,14 @@ Ball→OuterRace, 133). But each site's model predicted over *all* of its own
 windows, including ones it trained on. **The honest generalisation numbers are
 the 53.8–69.5% (mean 60.4%) accuracies in §5, three-class, against a 50.0%
 floor.** If someone quotes 91% back at you as model accuracy, correct them.
+
+**1a. The decision layer ties the old rule on held-out data; it does not beat it.**
+
+Both miss 0 of 16 held-out faults and raise 0 of 12 cross-site false alarms. On
+the live demo the policy flags 8 machines to the old rule's 6, but both extra
+machines run on training recordings — in-sample, not an improvement. The
+probabilities feeding the policy are uncalibrated (ECE 0.2146), and calibration
+was tried and made it worse.
 
 **2. The GAN augmentation has a known mismatch, unfixed.**
 

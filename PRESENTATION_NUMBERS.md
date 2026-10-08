@@ -92,6 +92,25 @@ a real non-IID majority-class bias remains after the artifact is removed.
 Plain FedAvg oscillated round to round and is not the headline result; FedProx
 (mu = 0.1, 30 rounds) is.
 
+### Maintenance decisions — the expected-cost policy and SPRT
+
+**Source:** `python -m fleetmind.decision.phase3`, `python -m fleetmind.decision.phase4`
+(deployed checkpoints, held-out recordings), and `mlruns/decision/phase5/before_after.json`
+
+| Figure | Value |
+|---|---|
+| Faulted held-out recordings missed — heuristic / policy / policy + SPRT | **0 / 16** each |
+| Cross-site false alarms — all three rules | **0 / 12** (0 of 2,484 healthy windows flagged) |
+| Mean detection delay — heuristic / policy / SPRT | 0.25 / 0.00 / **0.62** windows |
+| Flag threshold, derived from costs | P(faulted) ≥ **0.9** |
+| SPRT targets | α = 0.01, β = 0.05, boundary A = **4.5539** |
+| Live demo, held-out machines flagged — heuristic / policy | **4 / 4** both |
+
+Say "cross-site" every time you quote the false-alarm figure: no healthy recording
+is held out within a site, so each model is scored on the other sites' Normal
+recordings — 12 pairs from only 4 distinct healthy recordings, at a different
+motor load.
+
 ---
 
 ## (b) Do NOT quote these numbers
@@ -100,6 +119,7 @@ Plain FedAvg oscillated round to round and is not the headline result; FedProx
 |---|---|
 | **91.44%** as accuracy | It is **in-sample model-vs-ground-truth agreement** — 3,993 of 4,367 stored predictions match the documented label, but each site's model predicted over all of its own windows, including ones it trained on. A useful integration check; a meaningless generalisation claim. If someone quotes it back at you, correct them. |
 | **62.7 – 72.5%** (and 64.83 / 72.46 / 62.71 / 65.68%) | These are `metrics.json`'s `best_val_acc` — the best accuracy any *epoch* reached. `ml/train.py` calls `torch.save()` **after** the training loop with no best-epoch guard, so the saved weights are the *last* epoch's. Those figures describe models **never written to disk**. Confirmed twice: through `decision/probs.py`, and by replaying `train.py`'s own validation loop against the saved checkpoints. |
+| **8 vs 6 machines flagged** as an improvement | On the live demo the policy flags 8 machines and the heuristic 6, but both extra machines (A2, B2) run on recordings their site model trained on. In-sample. On held-out demo machines it is 4 vs 4. |
 | Any **"32-fold"** calibration improvement | It came from a *signed* over-confidence mean (+0.2101 → +0.0065), where over- and under-confident bins cancel. The honest figure is **ECE 0.2146 → 0.0966, about 2.2× lower**, with **Brier 0.5830 → 0.5726 — barely changed**. Brier is a proper scoring rule, so that near-flat result is the one that matters. |
 
 ---
@@ -116,8 +136,12 @@ Plain FedAvg oscillated round to round and is not the headline result; FedProx
   progressively releases recorded windows and the UI says so. GPS and site locations
   on `Equipment`/`WorkOrder` are **simulated** — CWRU has no location data.
 - **Learned or autonomous agents.** The Monitor → Diagnostic → Risk → Maintenance
-  chain is four deterministic rule functions. The LLM layer writes prose and may not
-  originate a number. Nothing in the decision path is learned except the classifier.
+  chain is four deterministic rule functions, kept as a baseline. The decision path
+  is an expected-cost policy over a stated cost matrix plus a sequential test — decision
+  theory, not learning. The LLM layer writes prose and may not originate a number.
+  Nothing in the decision path is learned except the classifier.
+- **That the decision layer beats the old rule on held-out data.** It ties: zero
+  misses and zero cross-site false alarms for both.
 - **Federated learning beating local training.** It does not, in any configuration
   measured. See (a).
 - **Any ROI, cost-saving, downtime-avoided or payback figure.** No such number exists
@@ -155,10 +179,10 @@ result attributable to the dataset rather than to the code.
 
 | Check | Result |
 |---|---|
-| `pytest` | **329 passed** |
+| `pytest` | **369 passed** (2026-10-08) |
 | `ruff check .` | All checks passed |
-| `ruff format --check .` | 111 files already formatted |
-| `mypy fleetmind` | no issues in 78 source files |
+| `ruff format --check .` | 121 files already formatted |
+| `mypy fleetmind` | no issues in 84 source files |
 
 `mlruns/` is gitignored, so every artefact above is reproducible from the commands
 named rather than committed.

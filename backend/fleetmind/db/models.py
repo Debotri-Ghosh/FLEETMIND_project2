@@ -97,6 +97,10 @@ class ModelPrediction(Base):
     model_version: Mapped[str] = mapped_column(Text, nullable=False)
     predicted_label: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float | None] = mapped_column(Float)
+    # The full softmax distribution, ordered as ml/model.py:LABEL_MAP. The
+    # expected-cost policy needs P(Normal), which the argmax `confidence` above
+    # cannot supply. Nullable: rows written before migration 0007 stay valid.
+    class_probabilities: Mapped[list[float] | None] = mapped_column(RawValuesType)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

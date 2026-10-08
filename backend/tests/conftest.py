@@ -145,10 +145,18 @@ def anon_client(db_engine, seeded_session):
 
 
 @pytest.fixture()
-def product_session(db_engine):
+def product_session(db_engine, monkeypatch):
     """Seeds depots + customers/technicians/equipment + one experiment ->
     window -> prediction -> agent_decision chain, for product-layer router
-    and sync_equipment_status tests."""
+    and sync_equipment_status tests.
+
+    The seeded decision is a heuristic-agent decision ("[HIGH] ..."), so this
+    fixture pins decision_policy to "heuristic": the tests built on it exercise
+    the rule that matches the data they seed. The expected-cost/SPRT path has
+    its own tests in test_decision_phase5.py."""
+    from fleetmind.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "decision_policy", "heuristic")
     factory = sessionmaker(bind=db_engine, expire_on_commit=False)
     session = factory()
 

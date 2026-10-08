@@ -23,13 +23,19 @@ probabilities fed to it. See `OPEN_QUESTIONS.md` Q1.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 from fleetmind.decision import costs
 from fleetmind.ml.model import LABEL_MAP
 
 NORMAL_INDEX = LABEL_MAP.index("Normal")
 
-#: Actions at which `sync_equipment_status` flags a machine (HIGH and above).
+#: agent_name on decisions this policy writes. The sync bridge reads only these
+#: when the policy is active, so heuristic decisions still in the database can
+#: never be mistaken for policy evidence.
+AGENT_NAME = "expected_cost_policy"
+
+#: Actions that count as actionable for a single window (HIGH and above).
 ACTIONABLE = frozenset({"schedule_maintenance", "stop_machine"})
 
 
@@ -147,3 +153,34 @@ def decision_text(action: str, p: float, table: dict[str, float]) -> str:
         f"[{urgency}] {costs.ACTION_TEXT[action]} | P(faulted): {p:.2%} | "
         f"Policy: expected cost | Expected costs (relative units): {alternatives}"
     )
+
+
+@lru_cache(maxsize=1)
+def _default_matrix_summary() -> tuple[float | None, tuple[str, ...]]:
+    """flag_threshold and never_optimal for the default matrix, scanned once."""
+    return flag_threshold(), tuple(never_optimal())
+
+
+def assess(probabilities: list[float]) -> dict:
+    """Everything the policy decided for one window, as plain quotable numbers.
+
+    The single source for both the LLM tool (`agents/tools.py`) and the evidence
+    API, so a figure in a narrative and the same figure on screen cannot differ.
+    Uses the default cost matrix -- the one the live pipeline decides with.
+    """
+    p = p_faulted(probabilities)
+    action, table = choose(p)
+    threshold, never = _default_matrix_summary()
+    return {
+        "class_probabilities": {
+            label: round(float(v), 6) for label, v in zip(LABEL_MAP, probabilities, strict=True)
+        },
+        "p_faulted": round(p, 6),
+        "action": action,
+        "urgency": costs.ACTION_TO_URGENCY[action],
+        "action_text": costs.ACTION_TEXT[action],
+        "expected_costs": {a: round(c, 4) for a, c in table.items()},
+        "flag_threshold_p_faulted": round(threshold, 4) if threshold is not None else None,
+        "never_optimal_actions": list(never),
+        "cost_matrix_relative_units": costs.matrix(),
+    }

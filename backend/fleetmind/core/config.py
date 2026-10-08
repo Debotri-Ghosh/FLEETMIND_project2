@@ -1,6 +1,7 @@
 """Application configuration via environment variables (12-factor)."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -44,6 +45,16 @@ class Settings(BaseSettings):
     # hole. Set JWT_SECRET in backend/.env for anything beyond a local demo.
     jwt_secret: str | None = None
     access_token_ttl_minutes: int = 720  # 12h: long enough for a demo session
+
+    # Which path makes maintenance decisions (OPEN_QUESTIONS.md Q6).
+    #   "expected_cost" -- the calibrated-decision layer: the action with least
+    #                      expected cost (decision/policy.py), and a machine is
+    #                      flagged by a repeated SPRT over its windows
+    #                      (decision/sequential.py). The authoritative path.
+    #   "heuristic"     -- the original four-agent chain in agents/agents.py,
+    #                      flagging on ANY HIGH/CRITICAL window. Kept so every
+    #                      documented heuristic figure stays reproducible.
+    decision_policy: Literal["expected_cost", "heuristic"] = "expected_cost"
 
     @property
     def cors_origin_list(self) -> list[str]:

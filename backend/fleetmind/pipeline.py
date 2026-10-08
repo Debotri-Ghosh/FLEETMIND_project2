@@ -24,6 +24,7 @@ from sqlalchemy import select
 from fleetmind.agents.graph import build_agent_graph
 from fleetmind.agents.run import run_agent_pipeline
 from fleetmind.agents.sync_equipment_status import sync_equipment_status
+from fleetmind.core.config import get_settings
 from fleetmind.db.models import (
     AgentDecision,
     Depot,
@@ -31,6 +32,7 @@ from fleetmind.db.models import (
     ModelPrediction,
     SignalWindow,
 )
+from fleetmind.decision import policy as decision_policy
 from fleetmind.ml.predict import predict_depot
 
 MLRUNS = Path("mlruns")
@@ -84,6 +86,41 @@ def _run_agents_for_new_predictions(session, agent_app=None) -> int:
     return len(rows)
 
 
+def _run_policy_for_new_predictions(session) -> int:
+    """Decide every undecided prediction with the expected-cost policy.
+
+    Writes one AgentDecision per prediction, exactly as the heuristic path does,
+    so the API, the UI and the sync bridge need no new tables. The decision text
+    starts with the same `[URGENCY]` tag; `risk_score` holds P(faulted).
+
+    A prediction with no stored class distribution (written before migration
+    0007) cannot be decided by this policy. It is skipped and counted, never
+    silently decided by a different rule under this policy's name.
+    """
+    rows = session.execute(
+        select(ModelPrediction.id, ModelPrediction.class_probabilities)
+        .outerjoin(AgentDecision, AgentDecision.prediction_id == ModelPrediction.id)
+        .where(AgentDecision.id.is_(None))
+        .order_by(ModelPrediction.window_id)
+    ).all()
+    written = 0
+    for prediction_id, probabilities in rows:
+        if not probabilities:
+            continue
+        p = decision_policy.p_faulted([float(v) for v in probabilities])
+        action, table = decision_policy.choose(p)
+        session.add(
+            AgentDecision(
+                prediction_id=prediction_id,
+                agent_name=decision_policy.AGENT_NAME,
+                decision_text=decision_policy.decision_text(action, p, table),
+                risk_score=p,
+            )
+        )
+        written += 1
+    return written
+
+
 def process_arrived_windows(
     session, model_dir: Path | None = None, agent_app=None
 ) -> dict[str, int]:
@@ -96,7 +133,10 @@ def process_arrived_windows(
 
     predictions = _predict_arrived(session, model_dir)
     session.flush()
-    decisions = _run_agents_for_new_predictions(session, agent_app=agent_app)
+    if get_settings().decision_policy == "expected_cost":
+        decisions = _run_policy_for_new_predictions(session)
+    else:
+        decisions = _run_agents_for_new_predictions(session, agent_app=agent_app)
     session.flush()
 
     filed: list[tuple[str, str]] = []

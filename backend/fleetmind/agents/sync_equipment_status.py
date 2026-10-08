@@ -23,9 +23,20 @@ sync re-files one rather than silently leaving the equipment unexplained.
 The open-request check is what keeps re-runs idempotent — it does not refile
 once a request is already open for that equipment.
 
+Two flagging rules, chosen by ``Settings.decision_policy`` (OPEN_QUESTIONS.md Q6):
+
+* ``heuristic`` -- the rule described above: any single HIGH/CRITICAL window
+  flags the machine. Reads every decision for the experiment.
+* ``expected_cost`` (default) -- reads only the expected-cost policy's own
+  decisions (``policy.AGENT_NAME``), whose ``risk_score`` is P(faulted), and
+  flags the machine only when a repeated SPRT over them, in window order,
+  crosses Wald's upper boundary (``decision/sequential.py``). The request it
+  files points at the decision on which the boundary was crossed.
+
 Usage:
     python -m fleetmind.agents.sync_equipment_status
     python -m fleetmind.agents.sync_equipment_status --dry-run
+    python -m fleetmind.agents.sync_equipment_status --policy heuristic
 """
 
 from __future__ import annotations
@@ -36,6 +47,7 @@ import re
 from sqlalchemy import insert, select, update
 from sqlalchemy.exc import IntegrityError
 
+from fleetmind.core.config import get_settings
 from fleetmind.db.models import (
     AgentDecision,
     Equipment,
@@ -44,6 +56,8 @@ from fleetmind.db.models import (
     SignalWindow,
 )
 from fleetmind.db.session import create_db_engine, make_session_factory
+from fleetmind.decision import policy as decision_policy
+from fleetmind.decision import sequential
 
 URGENCY_ORDER = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 FLAG_THRESHOLD = URGENCY_ORDER["HIGH"]
@@ -92,6 +106,8 @@ def _ensure_ai_service_request(
     depot_id: int,
     decision_rows: list[tuple[int, str, int]],
     dry_run: bool,
+    trigger: tuple[int, str, int] | None = None,
+    description: str | None = None,
 ) -> str | None:
     """Creates an AI-filed ServiceRequest for this equipment if none is
     currently open. Returns the urgency it filed at, or None if it left
@@ -108,10 +124,15 @@ def _ensure_ai_service_request(
     if already_open is not None:
         return None
 
-    worst_decision = _worst_decision(decision_rows)
+    worst_decision = trigger if trigger is not None else _worst_decision(decision_rows)
     if worst_decision is None:
         return None
     decision_id, urgency, prediction_id = worst_decision
+    if description is None:
+        description = (
+            f"Automatically filed by the agent pipeline after a {urgency} "
+            "risk decision from the diagnosis/risk agent chain."
+        )
 
     if not dry_run:
         # Two concurrent sync runs can both pass the "already_open" read-check
@@ -132,10 +153,7 @@ def _ensure_ai_service_request(
                         depot_id=depot_id,
                         equipment_id=equip_id,
                         title=f"AI-flagged: {urgency.title()} urgency detected",
-                        description=(
-                            f"Automatically filed by the agent pipeline after a {urgency} "
-                            "risk decision from the diagnosis/risk agent chain."
-                        ),
+                        description=description,
                         priority=urgency.lower(),
                         status="reported",
                         agent_decision_id=decision_id,
@@ -149,8 +167,60 @@ def _ensure_ai_service_request(
     return urgency
 
 
+def policy_decision_rows(session, experiment_id: int) -> list[tuple[int, str, int, float | None]]:
+    """The policy's own decisions for one recording, in window order.
+
+    (decision_id, decision_text, prediction_id, P(faulted)). Shared by the sync
+    bridge and the evidence API so both run the SPRT over identical evidence.
+    """
+    rows = session.execute(
+        select(
+            AgentDecision.id,
+            AgentDecision.decision_text,
+            AgentDecision.prediction_id,
+            AgentDecision.risk_score,
+        )
+        .join(ModelPrediction, ModelPrediction.id == AgentDecision.prediction_id)
+        .join(SignalWindow, SignalWindow.id == ModelPrediction.window_id)
+        .where(
+            SignalWindow.experiment_id == experiment_id,
+            AgentDecision.agent_name == decision_policy.AGENT_NAME,
+        )
+        .order_by(SignalWindow.window_index)
+    ).all()
+    return [(r[0], r[1], r[2], r[3]) for r in rows]
+
+
+#: Urgency recorded when the SPRT flags a machine: a flag means the policy's
+#: answer is to plan the repair, which costs.ACTION_TO_URGENCY maps to HIGH.
+SPRT_FLAG_URGENCY = "HIGH"
+
+
+def sprt_trigger(
+    rows: list[tuple[int, str, int, float | None]],
+) -> tuple[tuple[int, str, int] | None, sequential.SprtResult | None]:
+    """Run the repeated SPRT over one machine's policy decisions, in window order.
+
+    rows: [(decision_id, decision_text, prediction_id, p_faulted), ...], already
+    ordered by window. A row with no P(faulted) is not evidence and is skipped,
+    never read as zero. Returns (trigger, result); trigger is the decision on
+    which the upper boundary was crossed, or None if the machine is not flagged.
+    """
+    usable = [(d, t, pr, p) for d, t, pr, p in rows if p is not None]
+    if not usable:
+        return None, None
+    result = sequential.run([sequential.llr(p) for _, _, _, p in usable])
+    if not result.flagged or result.flag_index is None:
+        return None, result
+    decision_id, _, prediction_id, _ = usable[result.flag_index]
+    return (decision_id, SPRT_FLAG_URGENCY, prediction_id), result
+
+
 def sync_equipment_status(
-    session, dry_run: bool = False, filed_requests_log: list[tuple[str, str]] | None = None
+    session,
+    dry_run: bool = False,
+    filed_requests_log: list[tuple[str, str]] | None = None,
+    policy: str | None = None,
 ) -> list[tuple[str, str, str, str | None]]:
     """Returns [(equipment_name, old_status, new_status, worst_urgency), ...] for changed rows.
 
@@ -158,7 +228,13 @@ def sync_equipment_status(
     requests per _ensure_ai_service_request's rules — see module docstring.
     If filed_requests_log is given, (equipment_name, urgency) is appended to
     it for every request filed (or, in dry-run, that would be filed).
+
+    ``policy`` overrides ``Settings.decision_policy`` ("heuristic" or
+    "expected_cost"); see the module docstring for the two flagging rules.
     """
+    mode = policy or get_settings().decision_policy
+    if mode not in ("heuristic", "expected_cost"):
+        raise ValueError(f"unknown decision policy {mode!r}")
     equipment_rows = session.execute(
         select(
             Equipment.id,
@@ -172,16 +248,40 @@ def sync_equipment_status(
 
     changes = []
     for equip_id, name, old_status, customer_id, depot_id, experiment_id in equipment_rows:
-        decision_rows = session.execute(
-            select(AgentDecision.id, AgentDecision.decision_text, AgentDecision.prediction_id)
-            .join(ModelPrediction, ModelPrediction.id == AgentDecision.prediction_id)
-            .join(SignalWindow, SignalWindow.id == ModelPrediction.window_id)
-            .where(SignalWindow.experiment_id == experiment_id)
-        ).all()
-
-        worst = _worst_urgency([text for _, text, _ in decision_rows])
-        worst_rank = URGENCY_ORDER.get(worst, -1) if worst is not None else -1
-        new_status = "maintenance" if worst_rank >= FLAG_THRESHOLD else "active"
+        trigger: tuple[int, str, int] | None = None
+        description: str | None = None
+        decision_rows: list[tuple[int, str, int]]
+        if mode == "heuristic":
+            decision_rows = [
+                (r[0], r[1], r[2])
+                for r in session.execute(
+                    select(
+                        AgentDecision.id, AgentDecision.decision_text, AgentDecision.prediction_id
+                    )
+                    .join(ModelPrediction, ModelPrediction.id == AgentDecision.prediction_id)
+                    .join(SignalWindow, SignalWindow.id == ModelPrediction.window_id)
+                    .where(SignalWindow.experiment_id == experiment_id)
+                ).all()
+            ]
+            worst = _worst_urgency([text for _, text, _ in decision_rows])
+            worst_rank = URGENCY_ORDER.get(worst, -1) if worst is not None else -1
+            new_status = "maintenance" if worst_rank >= FLAG_THRESHOLD else "active"
+        else:
+            policy_rows = policy_decision_rows(session, experiment_id)
+            decision_rows = [(r[0], r[1], r[2]) for r in policy_rows]
+            trigger, result = sprt_trigger(policy_rows)
+            worst = trigger[1] if trigger is not None else None
+            new_status = "maintenance" if trigger is not None else "active"
+            if trigger is not None and result is not None:
+                a, _ = sequential.boundaries()
+                description = (
+                    "Automatically filed by the expected-cost policy: a repeated "
+                    "sequential probability ratio test over this machine's windows "
+                    f"crossed its fault boundary (A = {a:.4f}) after "
+                    f"{result.n_examined} window(s), with false-alarm target "
+                    f"alpha = {sequential.DEFAULT_ALPHA} and miss target "
+                    f"beta = {sequential.DEFAULT_BETA}."
+                )
 
         if new_status != old_status:
             changes.append((name, old_status, new_status, worst))
@@ -198,6 +298,8 @@ def sync_equipment_status(
                 depot_id=depot_id,
                 decision_rows=decision_rows,
                 dry_run=dry_run,
+                trigger=trigger,
+                description=description,
             )
             if filed_urgency is not None and filed_requests_log is not None:
                 filed_requests_log.append((name, filed_urgency))
@@ -208,6 +310,15 @@ def sync_equipment_status(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sync Equipment.status from agent_decisions.")
     parser.add_argument("--dry-run", action="store_true", help="Print changes without committing.")
+    parser.add_argument(
+        "--policy",
+        choices=("heuristic", "expected_cost"),
+        default=None,
+        help=(
+            "Flagging rule; defaults to Settings.decision_policy. Use 'heuristic' after "
+            "agents/run.py --all-pending, which writes heuristic decisions only."
+        ),
+    )
     args = parser.parse_args()
 
     engine = create_db_engine()
@@ -217,7 +328,7 @@ def main() -> None:
     filed_requests: list[tuple[str, str]] = []
     try:
         changes = sync_equipment_status(
-            session, dry_run=args.dry_run, filed_requests_log=filed_requests
+            session, dry_run=args.dry_run, filed_requests_log=filed_requests, policy=args.policy
         )
     except Exception:
         # Nothing in this run has been committed yet (commit() only happens

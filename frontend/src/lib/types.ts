@@ -156,6 +156,56 @@ export interface MatchedFrequency {
   harmonic: number;
 }
 
+export interface PolicyAssessment {
+  class_probabilities: Record<string, number>;
+  p_faulted: number;
+  action: string;
+  urgency: string;
+  action_text: string;
+  /** Relative units: an unplanned run-to-failure costs 100. */
+  expected_costs: Record<string, number>;
+  flag_threshold_p_faulted: number | null;
+  never_optimal_actions: string[];
+  cost_matrix_relative_units: Record<string, Record<string, number>>;
+}
+
+export interface SprtSummary {
+  flagged: boolean;
+  windows_examined: number;
+  windows_available: number;
+  healthy_resets: number;
+  upper_boundary: number;
+  lower_boundary: number;
+  alpha: number;
+  beta: number;
+  max_evidence: number;
+}
+
+export interface PolicyAssessment {
+  class_probabilities: Record<string, number>;
+  p_faulted: number;
+  action: string;
+  urgency: string;
+  action_text: string;
+  /** Relative units: an unplanned run-to-failure costs 100. */
+  expected_costs: Record<string, number>;
+  flag_threshold_p_faulted: number | null;
+  never_optimal_actions: string[];
+  cost_matrix_relative_units: Record<string, Record<string, number>>;
+}
+
+export interface SprtSummary {
+  flagged: boolean;
+  windows_examined: number;
+  windows_available: number;
+  healthy_resets: number;
+  upper_boundary: number;
+  lower_boundary: number;
+  alpha: number;
+  beta: number;
+  max_evidence: number;
+}
+
 export interface EvidencePackage {
   service_request_id: number;
   window_id: number;
@@ -177,6 +227,13 @@ export interface EvidencePackage {
   risk_score: number | null;
   decision_text: string | null;
 
+  /** agent_name of the stored decision: "expected_cost_policy" or a heuristic agent. */
+  decided_by: string | null;
+  policy_assessment: PolicyAssessment | null;
+  sprt: SprtSummary | null;
+  baseline_risk_score: number;
+  baseline_urgency: string;
+
   /** Documented by the CWRU dataset creators. The model never sees these. */
   documented_fault_type: string;
   documented_fault_diameter_in: number | null;
@@ -185,6 +242,8 @@ export interface EvidencePackage {
   site_load_hp: number;
   nominal_rpm: number | null;
   source_file: string;
+  /** True when the recording was in the site model's training split (in-sample). */
+  recording_in_training_split: boolean;
   prediction_matches_documented: boolean;
 }
 

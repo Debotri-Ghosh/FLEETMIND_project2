@@ -150,7 +150,11 @@ export function GroundTruthVsPrediction({ evidence }: { evidence: EvidencePackag
             value={`${(evidence.diagnosis_confidence * 100).toFixed(1)}%`}
           />
           <Field
-            label="Risk score"
+            label={
+              evidence.decided_by === "expected_cost_policy"
+                ? "P(faulted)"
+                : "Risk score (heuristic)"
+            }
             value={
               evidence.risk_score !== null
                 ? `${(evidence.risk_score * 100).toFixed(1)}%`
@@ -158,9 +162,13 @@ export function GroundTruthVsPrediction({ evidence }: { evidence: EvidencePackag
             }
           />
 
-          <p className="mt-3 text-[11px] leading-relaxed text-ink-3">
-            Trained on an experiment-level split, so no window from this recording
-            appeared in its training set.
+          <p
+            className="mt-3 text-[11px] leading-relaxed text-ink-3"
+            data-testid="split-note"
+          >
+            {evidence.recording_in_training_split
+              ? "This recording was in the site model's training split, so agreement here is in-sample — it is not evidence the model generalises."
+              : "This recording was held out of the site model's training split (experiment-level), so no window from it was trained on."}
           </p>
         </div>
       </div>

@@ -46,9 +46,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "openai/gpt-oss-120b"
 MAX_TOKENS = 4000
-# Four tools, and the band-energy one is worth a couple of probes. Anything
+# Five tools, and the band-energy one is worth a couple of probes. Anything
 # past this is a loop, not reasoning.
-MAX_TOOL_ITERATIONS = 8
+MAX_TOOL_ITERATIONS = 10
 
 
 class LLMNotConfigured(RuntimeError):
@@ -65,9 +65,8 @@ You are a vibration-analysis engineer writing up a predictive-maintenance \
 finding for an industrial bearing on a rotating machine (motor, pump, fan or \
 compressor) at a customer's manufacturing site.
 
-A 1D CNN classifier has already flagged one vibration window, and a \
-rule-based agent chain has already computed a risk score and urgency. Your job \
-is NOT to redo that analysis. Your job is to explain it, in the plain prose a \
+A 1D CNN classifier has already scored one vibration window, and a decision \
+has already been made from it. Your job is NOT to redo that analysis. Your job is to explain it, in the plain prose a \
 maintenance planner and a field technician can act on.
 
 Hard rules:
@@ -77,8 +76,11 @@ extrapolate or invent a figure. In particular do NOT restate a value in another 
 unit or as a percentage -- writing "0.0325%" for a returned 0.000325 is \
 originating a number, which is not yours to do; quote the 0.000325 and describe \
 it in words instead. If you want a number you do not have, call a tool for it.
-2. Do not contradict the risk score or urgency from get_risk_assessment. You \
-may explain them; you may not revise them.
+2. Call get_decision_policy. If it reports policy_is_authoritative_here = true, \
+the decision on file is the expected-cost policy's action and urgency, and \
+get_risk_assessment is a heuristic baseline you may mention only as a \
+comparison. Otherwise get_risk_assessment's urgency is the decision on file. \
+Explain the decision on file; never revise it.
 3. The characteristic defect frequencies are bearing geometry, not an \
 explanation of what the classifier looked at. Never write that the model \
 "detected" or "looked at" a frequency.
@@ -103,7 +105,7 @@ exactly these keys:
 
 {
   "diagnosis_narrative": "2-4 sentences: what the signal shows and what fault it points to, citing the tool-supplied figures.",
-  "maintenance_recommendation": "2-4 sentences: what to do, in what timeframe, and what to check or bring. Must match the urgency from get_risk_assessment.",
+  "maintenance_recommendation": "2-4 sentences: what to do, in what timeframe, and what to check or bring. Must match the urgency of the decision on file (rule 2).",
   "evidence_cited": ["each figure you relied on, as 'name = value unit'"],
   "corroboration": "one of: strong | partial | weak | none"
 }
