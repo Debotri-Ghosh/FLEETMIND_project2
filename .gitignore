@@ -22,14 +22,46 @@ out/
 .env
 .env.local
 
-# ── Raw CWRU dataset (restored via download script) ──────
-data/raw/
-*.mat
+# ── CWRU dataset ─────────────────────────────────────────
+# Committed so the project runs on another machine without a separate
+# download. Only the 64 recordings the project actually uses are kept:
+# ingestion/manifest.py takes 12k_DE + Normal and skips 12k_FE / 48k_DE, so
+# that is 60 drive-end recordings + 4 Normal, ~186 MB. The rest stays local.
+# (Git cannot re-include a file inside an excluded folder, so each level
+# excludes its *contents* and re-includes only the path that leads down.)
+data/raw/*
+!data/raw/cwru/
+data/raw/cwru/*
+!data/raw/cwru/CWRU_organized/
+data/raw/cwru/CWRU_organized/*
+!data/raw/cwru/CWRU_organized/12k_DE/
+!data/raw/cwru/CWRU_organized/Normal/
 *.zip
+*.mat
+!data/raw/cwru/CWRU_organized/12k_DE/**/*.mat
+!data/raw/cwru/CWRU_organized/Normal/**/*.mat
 
 # ── Generated output ─────────────────────────────────────
 eda_output/
-mlruns/
+# ML output stays local, EXCEPT the files the running app reads: the four
+# deployed checkpoints (pipeline.py silently skips a site with no checkpoint,
+# so a fresh clone would replay nothing) with their metrics, and the federated
+# summary the dashboard plots. Retraining elsewhere would not reproduce them --
+# ml/train.py saves the last epoch, and every documented figure is from these.
+/mlruns/
+backend/mlruns/*
+!backend/mlruns/depot_1/
+!backend/mlruns/depot_2/
+!backend/mlruns/depot_3/
+!backend/mlruns/depot_4/
+backend/mlruns/depot_*/*
+!backend/mlruns/depot_*/cnn_state_dict.pt
+!backend/mlruns/depot_*/metrics.json
+!backend/mlruns/federated/
+backend/mlruns/federated/*
+!backend/mlruns/federated/fedprox/
+backend/mlruns/federated/fedprox/*
+!backend/mlruns/federated/fedprox/federated.json
 
 # ── Local databases ──────────────────────────────────────
 *.db

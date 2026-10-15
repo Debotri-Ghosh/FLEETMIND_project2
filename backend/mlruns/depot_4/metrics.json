@@ -1,0 +1,8 @@
+{
+  "depot_id": 4,
+  "best_val_acc": 0.6567796610169492,
+  "epochs": 20,
+  "train_windows": 887,
+  "val_windows": 236,
+  "split": "experiment-level (fixed 2026-09-19)"
+}

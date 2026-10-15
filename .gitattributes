@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Dataset recordings and model checkpoints are binary: never convert line endings.
+*.mat binary
+*.pt binary
