@@ -36,13 +36,17 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: backend/pyproject.toml
+          cache-dependency-path: |
+            backend/pyproject.toml
+            backend/constraints.txt
 
       - name: Install dependencies
         # [ml] too: tests/test_federated.py needs flwr. Everything the API
         # itself imports is in core deps now -- see tests/test_dependencies.py,
         # which fails if that stops being true.
-        run: pip install -e ".[ml,dev]"
+        # -c constraints.txt pins every package to the verified versions; without
+        # it pip resolves the newest of everything and mypy failed on newer libs.
+        run: pip install -e ".[ml,dev]" -c constraints.txt
 
       - name: Lint (ruff)
         run: ruff check .

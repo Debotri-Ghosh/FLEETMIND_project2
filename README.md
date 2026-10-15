@@ -260,8 +260,13 @@ python -m venv venv
 venv\Scripts\activate                 # Windows
 
 cd backend
-pip install -e ".[ml,dev,llm]"
+pip install -e ".[ml,dev,llm]" -c constraints.txt
 ```
+
+> **Keep `-c constraints.txt`.** It pins every package to the exact versions this
+> project was verified with. Without it pip installs the newest of everything
+> (numpy 2.x, SQLAlchemy 2.1, torch 2.14 at the time of writing), which is not the
+> environment any documented result came from.
 
 > **Run all backend commands from `backend/`.** `.env` and several relative
 > paths assume it.

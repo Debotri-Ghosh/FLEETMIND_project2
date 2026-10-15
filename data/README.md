@@ -21,17 +21,24 @@ loads (0–3 HP) are the four simulated sites, Plant A–D.
 
 ## Setting the project up on another machine
 
+Create the environment first, with pinned versions (from the repository root):
+
+```powershell
+python -m venv venv
+cd backend
+..\venv\Scripts\python.exe -m pip install -e ".[ml,dev,llm]" -c constraints.txt
+```
+
 The recordings are here, but the database is not — it is built from them. Run these
 from `backend/`, passing the data paths explicitly (ingestion's defaults are relative
 to wherever it is run, and the data lives at the repository root, not in `backend/`):
 
 ```powershell
 cd backend
-..env\Scripts\python.exe -m alembic upgrade head
-..env\Scripts\python.exe -m fleetmind.ingestion.ingest --data-dir ..\data
-aw\cwru --manifest ..\data\manifest.csv
-..env\Scripts\python.exe -m fleetmind.db.seed_product_tables
-..env\Scripts\python.exe -m fleetmind.db.seed_users
+..\venv\Scripts\python.exe -m alembic upgrade head
+..\venv\Scripts\python.exe -m fleetmind.ingestion.ingest --data-dir ..\data\raw\cwru --manifest ..\data\manifest.csv
+..\venv\Scripts\python.exe -m fleetmind.db.seed_product_tables
+..\venv\Scripts\python.exe -m fleetmind.db.seed_users
 ```
 
 The four deployed model checkpoints are committed too, in

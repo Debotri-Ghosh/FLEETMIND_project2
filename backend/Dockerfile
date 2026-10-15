@@ -1,11 +1,11 @@
 # ── Stage 1: build wheel ─────────────────────────────────
 FROM python:3.11-slim AS builder
 WORKDIR /app
-COPY pyproject.toml ./
+COPY pyproject.toml constraints.txt ./
 COPY fleetmind ./fleetmind
 COPY alembic ./alembic
 COPY alembic.ini ./
-RUN pip install --no-cache-dir --prefix=/install .
+RUN pip install --no-cache-dir --prefix=/install . -c constraints.txt
 
 # ── Stage 2: runtime ─────────────────────────────────────
 FROM python:3.11-slim

@@ -191,7 +191,7 @@ Write-Step 'Checking prerequisites'
 
 if (-not (Test-Path $Python)) {
     Write-Fail "Python venv not found at $Python"
-    Write-Host '       Create it: python -m venv venv ; venv\Scripts\activate ; cd backend ; pip install -e ".[ml,dev,llm]"'
+    Write-Host '       Create it: python -m venv venv ; venv\Scripts\activate ; cd backend ; pip install -e ".[ml,dev,llm]" -c constraints.txt'
     exit 1
 }
 Write-Ok "venv python: $Python"
